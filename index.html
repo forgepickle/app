@@ -6015,6 +6015,9 @@ async function _runSplashThenLaunch(phase1Min) {
   players = [];
   matches = [];
   pairs   = [];
+  alphaCache       = null;
+  alphaGroupAvgDna = null;
+  top3sDirty       = true;
   _clearRenderedScreens();
 
   // Pre-show appShell behind splash so it renders instantly after dismiss
@@ -6108,6 +6111,9 @@ async function launchApp() {
   players = [];
   matches = [];
   pairs   = [];
+  alphaCache       = null;
+  alphaGroupAvgDna = null;
+  top3sDirty       = true;
   activeSession = null;
   resetShuffle();
   matchListFilter = null; mlSelectedIds = []; mlSameTeam = false;
@@ -6231,6 +6237,9 @@ function _clearRenderedScreens() {
   if (lbListInd)  { lbListInd.innerHTML = ''; lbListInd.style.display = 'none'; }
   if (lbSkelPairs){ lbSkelPairs.style.display = 'flex'; }
   if (lbListPairs){ lbListPairs.innerHTML = ''; lbListPairs.style.display = 'none'; }
+  const lbPanelTop3sEl = document.getElementById('lbPanelTop3s');
+  if (lbPanelTop3sEl) lbPanelTop3sEl.innerHTML = '';
+  top3sDirty = true;
 
   // Match list — clear
   const matchWrap = document.getElementById('matchListWrap');
