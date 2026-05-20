@@ -2557,6 +2557,12 @@ body {
 .lb-medal.m2 { background: #A8A8A8; color: #fff; box-shadow: 0 2px 6px rgba(168,168,168,0.4); }
 .lb-medal.m3 { background: #CD7F32; color: #fff; box-shadow: 0 2px 6px rgba(205,127,50,0.4); }
 
+/* Top 3s podium rows */
+.top3s-podium { display: flex; flex-direction: column; gap: 10px; }
+.top3s-row    { display: flex; align-items: center; gap: 10px; }
+.top3s-name   { flex: 1; font-size: 16px; font-weight: 700; color: var(--grey-dark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top3s-value  { font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 800; font-size: 20px; color: var(--accent-dim); text-align: right; white-space: nowrap; }
+
 .lb-avatar {
   width: clamp(40px, 10.5vw, 48px); height: clamp(40px, 10.5vw, 48px); border-radius: 12px;
   background: var(--accent-bg); border: 2px solid var(--accent);
@@ -5501,6 +5507,7 @@ let premiumMain             = 0;    // from getConfig — production Alpha gate
 let premiumDemo             = 0;    // from getConfig — demo Alpha gate (default 1 via GAS)
 let alphaLambda             = 0.1;  // from getConfig — Attribution decay rate
 let alphaCache              = null; // computed on first Alpha interaction, cleared by refreshAllData
+let top3sDirty              = true; // re-render Top 3s HTML on next tab switch after data refresh
 let alphaGroupAvgDna        = null; // group average DNA for radar shadow, cleared by refreshAllData
 let currentIndividualPlayer = null; // tracks Individual tab selection for Alpha carry-over
 let currentAlphaPlayer      = null; // primary player selected on Alpha tab
@@ -6264,7 +6271,9 @@ async function refreshAllData() {
     matches = matchesRes.matches || [];
     alphaCache = null;       // Invalidate Alpha cache on fresh data
     alphaGroupAvgDna = null; // Invalidate group avg DNA on fresh data
+    top3sDirty = true;       // Invalidate Top 3s render on fresh data
     buildPairsFromMatches();
+    try { if (isPremiumActive()) _warmAlphaCache(); } catch(e) { console.warn('[Forge] Alpha cache warm failed:', e); }
     renderPlayers();
     renderAnalytics();
     // Fetch session after players/matches — sequential, non-blocking on failure
@@ -7967,9 +7976,218 @@ function switchLbTab(tab) {
   document.getElementById('lbPanelIndividual').classList.toggle('active', tab === 'individual');
   document.getElementById('lbPanelPairs').classList.toggle('active', tab === 'pairs');
   document.getElementById('lbPanelTop3s').classList.toggle('active', tab === 'top3s');
+  if (tab === 'top3s' && top3sDirty) renderTop3s();
 }
 
 function renderLeaderboard() { renderLbIndividual(); renderLbPairs(); renderShuffleEntryButton(); }
+
+// ==========================================================
+// TOP 3S LEADERBOARD
+// ==========================================================
+
+function renderTop3s() {
+  const panel = document.getElementById('lbPanelTop3s');
+  const premium = isPremiumActive();
+
+  // Guard: no player data yet
+  if (!players.length) {
+    const infoSvgSm = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;color:var(--grey-mid);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+    panel.innerHTML = '<div class="forge-notice" style="margin:8px clamp(12px,4vw,20px) 12px;">' + infoSvgSm +
+      '<div><span class="notice-title">No Data</span><span class="notice-body">Add some matches to see Top 3s rankings.</span></div></div>';
+    return;
+  }
+
+  top3sDirty = false;
+
+  // ---- Shared render helpers ----
+  const infoSvg =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;color:var(--grey-mid);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+
+  const ttBtn = function(key) {
+    return '<button class="tooltip-btn" onclick="showTooltipKey(\'' + key + '\')">' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></button>';
+  };
+
+  const medalEl = function(r) { return '<div class="lb-medal m' + r + '">' + r + '</div>'; };
+
+  // Empty states — two variants: standard card (light) vs alpha card (dark)
+  const emptyStandard =
+    '<div class="forge-notice" style="margin:0;border-radius:8px;align-items:center;">' + infoSvg +
+    '<div><span class="notice-body">Not enough data yet.</span></div></div>';
+  const emptyAlpha =
+    '<div class="alpha-body-empty"><span class="alpha-body-empty-text">Not enough data yet.</span></div>';
+
+  // ---- Win detection (locally scoped — mirrors _computeDna) ----
+  const _won = function(m, id) {
+    const aGW = (m.scores || []).filter(function(s) { return s.a > s.b; }).length;
+    const bGW = (m.scores || []).filter(function(s) { return s.b > s.a; }).length;
+    if (aGW === bGW) return false;
+    const onA = m.teamA && (m.teamA[0] === id || m.teamA[1] === id);
+    return onA ? aGW > bGW : bGW > aGW;
+  };
+
+  // ---- Active players ----
+  const activePlayers = players.filter(function(p) { return p.status === 'active'; });
+
+  // ---- Metric 1: Current Win Streak ----
+  const streakData = activePlayers.map(function(p) {
+    const allPMatches = _matchesForPlayer(p.id);           // original submission order (oldest first)
+    const pMatches    = allPMatches.slice().reverse();      // newest submission first — mirrors last5 backend logic
+    let streak = 0;
+    for (let i = 0; i < pMatches.length; i++) {
+      if (_won(pMatches[i], p.id)) streak++;
+      else break;
+    }
+    // Tiebreaker: ID of player's most recently submitted match (m{timestamp} — lexicographic = chronological)
+    const lastId = allPMatches.length > 0 ? (allPMatches[allPMatches.length - 1].id || '') : '';
+    return { name: p.name, value: streak, lastId: lastId };
+  }).filter(function(x) { return x.value > 0; })
+    .sort(function(a, b) {
+      if (b.value !== a.value) return b.value - a.value;   // higher streak first
+      return b.lastId.localeCompare(a.lastId);              // tie: most recently active first
+    })
+    .slice(0, 3);
+
+  // ---- Metric 2: Best Synergies ----
+  const synergyData = pairs.filter(function(pair) {
+    return (pair.wins + pair.losses + pair.ties) >= 2;
+  }).map(function(pair) {
+    const p1 = players.find(function(p) { return p.id === pair.p1; });
+    const p2 = players.find(function(p) { return p.id === pair.p2; });
+    if (!p1 || !p2) return null;
+    return { name: escHtml(p1.name) + ' + ' + escHtml(p2.name), value: pair.synergy };
+  }).filter(Boolean)
+    .sort(function(a, b) { return b.value - a.value; })
+    .slice(0, 3);
+
+  // ---- Ensure alphaCache is populated for all active players (safety net) ----
+  // For premium users _warmAlphaCache() runs on data load — this guard covers
+  // edge cases: newly added players, inactive-to-active status changes mid-session.
+  if (premium) {
+    if (!alphaCache) alphaCache = {};
+    activePlayers.forEach(function(p) {
+      if (!alphaCache[p.id]) {
+        alphaCache[p.id] = {
+          attribution: _computeAttribution(p.id),
+          corridor:    _computeCorridor(p.id),
+          dna:         _computeDna(p.id, players),
+          matchCount:  _matchesForPlayer(p.id).length
+        };
+      }
+    });
+  }
+
+  // Alpha-eligible players: same 15-match gate as Alpha Analytics UI (Governance Rule 6)
+  const alphaEligible = activePlayers.filter(function(p) { return p.games >= 15; });
+
+  // ---- Metric 3: Individual Attribution ----
+  const attributionData = !premium ? [] : alphaEligible.map(function(p) {
+    const entry = alphaCache[p.id];
+    const a = entry && entry.attribution;
+    return (a != null) ? { name: p.name, value: a } : null;
+  }).filter(Boolean).sort(function(a, b) { return b.value - a.value; }).slice(0, 3);
+
+  // ---- Metric 4: At Their Peak (needle - p90; higher = closer to / above peak) ----
+  const atPeakData = !premium ? [] : alphaEligible.map(function(p) {
+    const entry = alphaCache[p.id];
+    const c = entry && entry.corridor;
+    return c ? { name: p.name, value: c.needle - c.p90 } : null;
+  }).filter(Boolean).sort(function(a, b) { return b.value - a.value; }).slice(0, 3);
+
+  // ---- Metrics 5-9: DNA axes ----
+  const dnaAxisData = function(axis) {
+    return !premium ? [] : alphaEligible.map(function(p) {
+      const entry = alphaCache[p.id];
+      const d = entry && entry.dna;
+      return d ? { name: p.name, value: d[axis] } : null;
+    }).filter(Boolean).sort(function(a, b) { return b.value - a.value; }).slice(0, 3);
+  };
+
+  const dominanceData   = dnaAxisData('dominance');
+  const resilienceData  = dnaAxisData('resilience');
+  const reliabilityData = dnaAxisData('reliability');
+  const collabData      = dnaAxisData('eliteCollab');
+  const disruptorData   = dnaAxisData('tacticalDisruptor');
+
+  // ---- Value formatters ----
+  const fmtStreak = function(v) { return v + (v === 1 ? ' win' : ' wins'); };
+  const fmtSyn    = function(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); };
+  const fmtSign   = function(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); };
+  const fmtPct    = function(v) { return Math.round(v * 100) + '%'; };
+  const fmtPeak   = function(v) {
+    if (v >= 0) return '+' + v.toFixed(1) + ' above peak';
+    return Math.abs(v).toFixed(1) + ' to peak';
+  };
+
+  // ---- Podium row renderer ----
+  const renderPodiumRows = function(data, fmt, isAlpha) {
+    if (!data.length) return isAlpha ? emptyAlpha : emptyStandard;
+    return '<div class="top3s-podium">' +
+      data.map(function(row, i) {
+        const nameStyle = isAlpha ? ' style="color:var(--alpha-text-dim);"' : '';
+        const valStyle  = isAlpha ? ' style="color:var(--alpha-gold);"' : '';
+        return '<div class="top3s-row">' +
+          medalEl(i + 1) +
+          '<span class="top3s-name"' + nameStyle + '>' + escHtml(row.name) + '</span>' +
+          '<span class="top3s-value"' + valStyle + '>' + fmt(row.value) + '</span>' +
+          '</div>';
+      }).join('') +
+      '</div>';
+  };
+
+  // ---- Card builders ----
+  const standardCard = function(title, ttKey, data, fmt) {
+    return '<div class="metric-card">' +
+      '<div class="metric-header">' +
+      '<span class="metric-title">' + title + '</span>' +
+      ttBtn(ttKey) +
+      '</div>' +
+      renderPodiumRows(data, fmt, false) +
+      '</div>';
+  };
+
+  const alphaCard = function(title, ttKey, data, fmt) {
+    const bodyHtml = premium
+      ? renderPodiumRows(data, fmt, true)
+      : '<div class="alpha-body-blurred">' +
+        '<div class="alpha-shimmer-bar wide"></div>' +
+        '<div class="alpha-shimmer-bar mid"></div>' +
+        '<div class="alpha-shimmer-bar short"></div>' +
+        '</div>';
+    return '<div class="alpha-card">' +
+      '<div class="alpha-card-header">' +
+      '<span class="alpha-glyph">α</span>' +
+      '<span class="alpha-card-title">' + title + '</span>' +
+      ttBtn(ttKey) +
+      '</div>' +
+      '<div class="alpha-card-body">' + bodyHtml + '</div>' +
+      '</div>';
+  };
+
+  // ---- Paywall notice (top of panel, premium = 0 only) ----
+  const paywallNotice = premium ? '' :
+    '<div class="forge-notice" style="margin:8px clamp(12px,4vw,20px) 12px;">' +
+    infoSvg +
+    '<div><strong class="notice-title">Subscription Needed</strong>' +
+    '<span class="notice-body">Subscribe to Forge Alpha to unlock advanced insights.</span></div></div>';
+
+  // ---- Assemble ----
+  let html = paywallNotice;
+  html += standardCard('Current Win Streak',   'top3sStreak',       streakData,      fmtStreak);
+  html += standardCard('Best Synergies',        'top3sBestSynergy',  synergyData,     fmtSyn);
+  html += '<div style="padding-top:12px;">';
+  html += alphaCard('Individual Attribution',   'top3sAttribution',  attributionData, fmtSign);
+  html += alphaCard('At Their Peak',            'top3sAtTheirPeak',  atPeakData,      fmtPeak);
+  html += alphaCard('Dominance',                'top3sDominance',    dominanceData,   fmtPct);
+  html += alphaCard('Resilience',               'top3sResilience',   resilienceData,  fmtPct);
+  html += alphaCard('Reliability',              'top3sReliability',  reliabilityData, fmtPct);
+  html += alphaCard('Collaborator',             'top3sCollaborator', collabData,      fmtPct);
+  html += alphaCard('Disruptor',                'top3sDisruptor',    disruptorData,   fmtPct);
+  html += '</div>';
+  html += '<div style="height:24px"></div>';
+
+  panel.innerHTML = html;
+}
 
 
 // ── GOVERNANCE: W/L derived from authoritative matches[] array ──
@@ -9372,6 +9590,24 @@ function _computeDna(pid, allPlayers) {
   };
 }
 
+// ---------- Alpha cache warm ----------
+// Pre-populates alphaCache for all active players.
+// Called from refreshAllData() when isPremiumActive() is true.
+// Idempotent: skips players already cached.
+function _warmAlphaCache() {
+  if (!alphaCache) alphaCache = {};
+  players.filter(function(p) { return p.status === 'active'; }).forEach(function(p) {
+    if (!alphaCache[p.id]) {
+      alphaCache[p.id] = {
+        attribution: _computeAttribution(p.id),
+        corridor:    _computeCorridor(p.id),
+        dna:         _computeDna(p.id, players),
+        matchCount:  _matchesForPlayer(p.id).length
+      };
+    }
+  });
+}
+
 // ---------- Archetype labelling ----------
 // 3-step rule (locked in D2/D3):
 //   Step 1: top axis ≤ 0.5 → null (no label — player has no dominant DNA)
@@ -9422,7 +9658,17 @@ const TOOLTIPS = {
   // Alpha tooltips
   alphaAttribution: { title: 'Attribution Score',     body: 'Measures how much you personally move the scoreboard, regardless of who you partner with. Calculated as your average point margin contribution weighted by match recency — recent matches count more.\n\n📈 Best: High positive — you consistently lift any partnership.\n📉 Worst: Negative — partners tend to score better without you.\n〰 Near zero — your impact is neutral; outcome driven by partners.' },
   alphaDna:         { title: 'Player DNA',             body: 'Your competitive fingerprint across five axes:\n\n• Dominance — average scoring margin when you win, shows ceiling.\n• Resilience — win rate in close games (margin ≤2), shows mental edge.\n• Reliability — consistency of performance; low variance = high reliability.\n• Collaborator — uplift you give partners versus their baseline.\n• Disruptor — win rate against opponents rated above you.\n\nThe pentagon shape reveals your playstyle archetype.' },
-  alphaCorridor:    { title: 'Performance Corridor',   body: 'Shows the range between your best and worst performances over all your matches (10th to 90th percentile point margins), with a needle marking your last 5 matches average.\n\n📈 Best: Needle at the top of a tight corridor — consistently dominant.\n📉 Worst: Needle at the bottom — recent form has dipped.\n〰 Wide corridor — high variance; big wins and big losses.' }
+  alphaCorridor:    { title: 'Performance Corridor',   body: 'Shows the range between your best and worst performances over all your matches (10th to 90th percentile point margins), with a needle marking your last 5 matches average.\n\n📈 Best: Needle at the top of a tight corridor — consistently dominant.\n📉 Worst: Needle at the bottom — recent form has dipped.\n〰 Wide corridor — high variance; big wins and big losses.' },
+  // Top 3s tooltips
+  top3sStreak:       { title: 'Current Win Streak',      body: 'Number of consecutive wins from the most recent match. Resets to zero on any loss or tie. Only players currently on a winning run appear here.\n\nMin: 1 win to qualify.' },
+  top3sBestSynergy:  { title: 'Best Synergies',          body: 'Top pairs by synergy score — how much better (or worse) they perform together compared to what their individual ratings predict. Positive means they elevate each other.\n\n⚡ Best: above +0.20 — real chemistry!\n〰 Near zero — playing to their ratings.\n\nMin: 2 matches as a pair to qualify.' },
+  top3sAttribution:  { title: 'Individual Attribution',  body: 'Measures how much a player personally moves the scoreboard regardless of partner. Calculated as average point margin contribution weighted by match recency — recent matches count more.\n\n📈 Best: High positive — lifts any partnership.\n📉 Worst: Negative — partners tend to score better without them.\n\nMin: 1 match to qualify.' },
+  top3sAtTheirPeak:  { title: 'At Their Peak',           body: 'How close a player\'s recent form (last 5 match average) is to their career ceiling (90th percentile). Positive means they are currently above their historical peak.\n\n📈 Best: Positive — performing above their own ceiling right now.\n📉 Worst: Large negative — significant gap between current and peak form.\n\nMin: 2 matches to qualify.' },
+  top3sDominance:    { title: 'Dominance',               body: 'Average point margin in wins, normalised across the group. Higher means they win by larger margins when they win — shows how commanding their victories are.\n\n📈 Best: Near 100% — dominant wins.\n〰 50% — average dominance for the group.\n\nMin: 2 matches to qualify.' },
+  top3sResilience:   { title: 'Resilience',              body: 'Win rate in close, decided matches (point margin of 2 or less, ties excluded). Higher means they hold their nerve when games are on the line.\n\n📈 Best: Near 100% — clutch under pressure.\n〰 50% — wins half of close matches.\n\nMin: 2 matches to qualify.' },
+  top3sReliability:  { title: 'Reliability',             body: 'Performance consistency across all matches — lower variance equals higher reliability. Higher means their results are predictable and stable regardless of opponent or partner.\n\n📈 Best: Near 100% — rock solid every game.\n〰 Lower — big swings between wins and losses.\n\nMin: 2 matches to qualify.' },
+  top3sCollaborator: { title: 'Collaborator',            body: 'Average win-rate uplift given to partners compared to those partners\' baseline without this player. Higher means they make everyone around them better.\n\n📈 Best: Near 100% — partners win more with them.\n〰 50% — neutral impact on partners.\n\nMin: 2 matches to qualify.' },
+  top3sDisruptor:    { title: 'Disruptor',               body: 'Win rate against opponents rated above them. Higher means they consistently punch above their weight and upset stronger players.\n\n📈 Best: Near 100% — beats better-rated opponents regularly.\n〰 50% — wins half of uphill battles.\n\nMin: 2 matches against higher-rated opponents to qualify.' }
 };
 
 function showTooltipKey(key) { const t = TOOLTIPS[key]; if (t) showTooltip(t.title, t.body); }
