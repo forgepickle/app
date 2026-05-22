@@ -2,26 +2,27 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.4.0 — Full Multi-User Sync      ║
+  ║  Version: 8.6.0 — 10-Round Shuffle          ║
   ║  Date: 2026-05-22                            ║
-  ║  Changes: Two sync gaps closed.              ║
-  ║           (1) TC1 fix: _startSessionSync()   ║
-  ║           was missing from saveShuffleSession║
-  ║           (host path) and stepBack() (back   ║
-  ║           from Add Match). Both paths now    ║
-  ║           start the 15s session poll so all  ║
-  ║           court cards sync regardless of how ║
-  ║           the session view was opened.       ║
-  ║           (2) Entry button + nav dot sync:   ║
-  ║           startBackgroundSync() interval     ║
-  ║           reduced from 5 min to 15s. getVer-║
-  ║           sion is a cheap JSONP GET (no auth,║
-  ║           no sheet read) — all phones now    ║
-  ║           detect session created/ended/delet-║
-  ║           ed within 15s and update the entry ║
-  ║           button and pulsing nav dot.        ║
+  ║  Changes: Three enhancements to Shuffle.     ║
+  ║           (1) Rounds expanded from 3 to 10.  ║
+  ║           Rounds pill selector replaced with ║
+  ║           a stepper control (- / N / +),     ║
+  ║           aligned to match Courts row width. ║
+  ║           (2) Round tab strip now scrollable ║
+  ║           (overflow-x: auto) in both Wizard  ║
+  ║           and Session View. Pills use natural ║
+  ║           width. Pencil icon stays pinned at ║
+  ║           right end of tab row.              ║
+  ║           (3) Algorithm upgrade: sliding     ║
+  ║           window blacklist (last 2 rounds),  ║
+  ║           opponent cross-pair tracking, and  ║
+  ║           weighted scoring (3x recent, 1x    ║
+  ║           historic). Balanced/Tiered now get ║
+  ║           up to 20 jitter-varied attempts    ║
+  ║           (break removed — jitter is random).║
   ║                                              ║
-  ║  v8.3.0 — Multi-User Session Sync           ║
+  ║  v8.5.0 — Sync Polish + Conflict Guard      ║
   ║           Win Streak, Best Synergies + 7     ║
   ║           Alpha metrics, alpha cache         ║
   ║           pre-warming, partial paywall gate. ║
@@ -3608,6 +3609,54 @@ body {
   text-transform: uppercase; color: var(--grey-mid);
   margin-bottom: 8px;
 }
+/* Rounds stepper: − [N] + */
+/* Wrapper gives the stepper the same horizontal inset as .toggle-pills */
+.shuffle-stepper-row {
+  padding: 0 clamp(12px, 4vw, 20px);
+}
+.shuffle-stepper {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  width: 100%;
+  background: var(--white);
+  border: 2px solid var(--grey-light);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.shuffle-stepper-btn {
+  flex: 1;
+  height: 100%;
+  background: none;
+  border: none;
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--grey-mid);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 0.12s, color 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.shuffle-stepper-btn:disabled { opacity: 0.25; cursor: default; }
+.shuffle-stepper-btn:not(:disabled):active { background: var(--accent-bg); color: var(--black); }
+.shuffle-stepper-val {
+  font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 1px;
+  color: var(--grey-mid);
+  min-width: 42px;
+  text-align: center;
+  border-left: 1.5px solid var(--grey-light);
+  border-right: 1.5px solid var(--grey-light);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* ── Step 2: Mode rows ── */
 .shuffle-mode-row {
@@ -3690,7 +3739,24 @@ body {
 }
 .shuffle-round-tabs {
   margin-bottom: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.shuffle-round-tabs::-webkit-scrollbar { display: none; }
+/* In tab-strip context pills must use natural width, not flex:1 */
+.shuffle-round-tabs .toggle-pill,
+.session-tab-pencil-row .toggle-pill {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+}
+/* Session view tab strip also scrollable */
+.session-tab-pencil-row .toggle-pills {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.session-tab-pencil-row .toggle-pills::-webkit-scrollbar { display: none; }
 .shuffle-rotation-notice {
   font-family: 'Barlow', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px; color: #d97706; /* amber */
@@ -3791,14 +3857,24 @@ body {
   text-transform: uppercase; color: var(--grey-mid);
   flex: 1;
 }
+/* Wrapper that contains the round-tab row + court cards. position:relative anchors
+   #sessionSyncOverlay so the overlay covers both areas, not just the cards. */
+.session-view-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
 .session-view-body {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 16px clamp(12px, 4vw, 20px) 24px;
-  position: relative; /* anchor for #sessionSyncOverlay */
 }
-/* Session sync overlay — covers court cards during visibilitychange refresh */
+/* Session sync overlay — covers round tabs + court cards during visibilitychange refresh.
+   Anchored to .session-view-content so it spans from the tab row down to the footer. */
 #sessionSyncOverlay {
   position: absolute;
   inset: 0;
@@ -4773,10 +4849,12 @@ body {
         </div>
         <div class="shuffle-control-group">
           <div class="shuffle-control-label">Rounds</div>
-          <div class="toggle-pills">
-            <button class="toggle-pill" id="shRound1" type="button" onclick="setShuffleRounds(1)">1</button>
-            <button class="toggle-pill" id="shRound2" type="button" onclick="setShuffleRounds(2)">2</button>
-            <button class="toggle-pill" id="shRound3" type="button" onclick="setShuffleRounds(3)">3</button>
+          <div class="shuffle-stepper-row">
+            <div class="shuffle-stepper">
+              <button class="shuffle-stepper-btn" type="button" id="shRoundDec" onclick="setShuffleRounds(shuffle.rounds - 1)" disabled>−</button>
+              <span class="shuffle-stepper-val" id="shRoundVal">1</span>
+              <button class="shuffle-stepper-btn" type="button" id="shRoundInc" onclick="setShuffleRounds(shuffle.rounds + 1)">+</button>
+            </div>
           </div>
         </div>
         <!-- Player/court count advisory — shown when selection is invalid -->
@@ -4908,33 +4986,40 @@ body {
       </div>
     </div>
 
-    <!-- Tab row + pencil: always rendered so pencil is always accessible -->
-    <div id="sessionViewTabWrap" style="padding:12px 16px 0;flex-shrink:0;">
-      <div class="session-tab-pencil-row">
-        <div class="toggle-pills" id="sessionViewRoundTabs" style="display:none;"></div>
-        <button class="swap-inline-btn" id="svSwapBtn" type="button" onclick="enterSessionViewSwapMode()" title="Swap players">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
-        </button>
-      </div>
-    </div>
+    <!-- Content wrapper: anchors #sessionSyncOverlay so it covers round tabs + court cards -->
+    <div class="session-view-content">
 
-    <!-- Scrollable court cards -->
-    <div class="session-view-body" id="sessionViewBody">
-      <!-- Skeleton shown during fetch -->
-      <div id="sessionViewSkeleton" class="skeleton-list" style="display:none;">
-        <div class="skeleton-card"></div>
-        <div class="skeleton-card"></div>
+      <!-- Tab row + pencil: always rendered so pencil is always accessible -->
+      <div id="sessionViewTabWrap" style="padding:12px 16px 0;flex-shrink:0;">
+        <div class="session-tab-pencil-row">
+          <div class="toggle-pills" id="sessionViewRoundTabs" style="display:none;"></div>
+          <button class="swap-inline-btn" id="svSwapBtn" type="button" onclick="enterSessionViewSwapMode()" title="Swap players">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+          </button>
+        </div>
       </div>
-      <div id="sessionViewCourtCards"></div>
-      <!-- Bench section (always visible when bench players exist) -->
-      <div id="sessionViewBenchSection"></div>
+
+      <!-- Scrollable court cards -->
+      <div class="session-view-body" id="sessionViewBody">
+        <!-- Skeleton shown during fetch -->
+        <div id="sessionViewSkeleton" class="skeleton-list" style="display:none;">
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+        </div>
+        <div id="sessionViewCourtCards"></div>
+        <!-- Bench section (always visible when bench players exist) -->
+        <div id="sessionViewBenchSection"></div>
+      </div>
+
       <!-- Sync overlay: shown on visibilitychange restore after long absence.
-           Blocks court-card taps while the latest session state is fetched. -->
+           Anchored to .session-view-content — covers round tabs + court cards.
+           Blocks taps while the latest session state is fetched. -->
       <div id="sessionSyncOverlay" style="display:none;">
         <div class="session-sync-spinner"></div>
         <span class="session-sync-label">Syncing…</span>
       </div>
-    </div>
+
+    </div><!-- /session-view-content -->
 
     <!-- Fixed footer -->
     <div class="session-view-footer" id="sessionViewFooter">
@@ -9979,7 +10064,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function resetShuffle() {
   shuffle = {
-    step: 0, players: [], courts: null, rounds: null,
+    step: 0, players: [], courts: null, rounds: 1,
     mode: null, lineup: null, activeRoundTab: 0,
     swapMode: false, swapSelected: null, exitConfirmShowing: false,
     sessionDate: ''
@@ -10205,11 +10290,14 @@ function setShuffleCourts(n) {
 }
 
 function setShuffleRounds(n) {
+  n = Math.max(1, Math.min(10, n));
   shuffle.rounds = n;
-  [1,2,3].forEach(i => {
-    const el = document.getElementById('shRound' + i);
-    if (el) el.classList.toggle('active', i === n);
-  });
+  const val = document.getElementById('shRoundVal');
+  const dec = document.getElementById('shRoundDec');
+  const inc = document.getElementById('shRoundInc');
+  if (val) val.textContent = n;
+  if (dec) dec.disabled = n <= 1;
+  if (inc) inc.disabled = n >= 10;
   _updateShStep1Next();
 }
 
@@ -11085,6 +11173,17 @@ function viewSessionMatch(matchId) {
 async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId) {
   const session = isDemoMode ? demoSession : activeSession;
   if (!session) return;
+
+  // Conflict guard: another player may have logged this court while this player
+  // was filling in the Add Match wizard. The background sync updates activeSession
+  // silently — so by the time we reach here, session.logged[round][court] may
+  // already be filled. Overwriting it would orphan the other player's match and
+  // double-count ratings. Reject the duplicate and let the player know.
+  if (session.logged[roundIdx] && session.logged[roundIdx][courtIdx]) {
+    showToast('Court already logged by another player', 'info');
+    return;
+  }
+
   session.logged[roundIdx][courtIdx] = newMatchId;
   if (isDemoMode) {
     demoSession = session;
@@ -11168,16 +11267,23 @@ async function fetchActiveSession() {
 // ── Shuffle Algorithm ──────────────────────────────────────────────
 
 function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
-  const usedPairs = new Set(); // stringified sorted pair keys
+  // allHistoricPairs: every partner + opponent pair ever used (global, soft penalty)
+  const allHistoricPairs = new Set();
+  // recentWindow: rolling array of Sets, one per round, capped at 2 entries (hard penalty)
+  const recentWindow = [];
   const roundLineups = [];
   let restedPlayers  = [];
   let notice = null;
   let doubleRestWarning = null;
 
   for (let r = 0; r < rounds; r++) {
+    // recentPairs = union of last 2 rounds' pair sets
+    const recentPairs = new Set();
+    recentWindow.forEach(s => s.forEach(k => recentPairs.add(k)));
+
     const result = r === 0
       ? { lineup: _generateRound(selectedPlayers, courts, mode, restedPlayers, r), notice: null }
-      : _generateRoundWithRotation(selectedPlayers, courts, mode, usedPairs, restedPlayers, r);
+      : _generateRoundWithRotation(selectedPlayers, courts, mode, allHistoricPairs, recentPairs, restedPlayers, r);
 
     if (result.notice) notice = result.notice;
 
@@ -11193,12 +11299,15 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
       doubleRestWarning = doubleRestNames + (newRested.length === 1 ? ' sits' : ' sit') + ' out twice — add a round or adjust courts to balance';
     }
 
-    // Add pairs from this round to usedPairs
-    result.lineup.forEach(court => {
-      [court.teamA, court.teamB].forEach(team => {
-        if (team.length === 2) usedPairs.add([team[0], team[1]].sort().join('|'));
-      });
-    });
+    // Build this round's pair set (partner pairs + opponent cross-pairs)
+    const roundPairs = _buildRoundPairs(result.lineup);
+
+    // Accumulate into global historic set
+    roundPairs.forEach(k => allHistoricPairs.add(k));
+
+    // Slide the window — keep only last 2 rounds
+    recentWindow.push(roundPairs);
+    if (recentWindow.length > 2) recentWindow.shift();
 
     roundLineups.push(result.lineup);
     restedPlayers = newRested;
@@ -11254,26 +11363,31 @@ function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0)
   return lineup;
 }
 
-function _generateRoundWithRotation(playerPool, courts, mode, usedPairs, restedPlayers, roundIndex = 1) {
+function _generateRoundWithRotation(playerPool, courts, mode, allHistoricPairs, recentPairs, restedPlayers, roundIndex = 1) {
   const rested = playerPool.filter(p => restedPlayers.some(r => r.id === p.id));
   const others = playerPool.filter(p => !restedPlayers.some(r => r.id === p.id));
   const basePool = [...rested, ...others];
 
   let bestResult = null;
-  let bestRepeatCount = Infinity;
+  let bestScore = Infinity;
 
+  // All modes get up to 20 attempts — balanced/tiered use jitter so each attempt
+  // produces a genuinely different candidate. No early break.
   for (let attempt = 0; attempt < 20; attempt++) {
     const pool = mode === 'random' ? _shuffleArray([...basePool]) : [...basePool];
     const candidate = _generateRound(pool, courts, mode, restedPlayers, roundIndex);
-    const repeatCount = _countRepeatPairs(candidate, usedPairs);
+    const roundPairs = _buildRoundPairs(candidate);
 
-    if (repeatCount === 0) return { lineup: candidate, notice: null };
-    if (repeatCount < bestRepeatCount) {
-      bestRepeatCount = repeatCount;
+    // Weighted score: recent repeats (last 2 rounds) penalised 3x, historic 1x
+    const recentRepeats  = _countSetOverlap(roundPairs, recentPairs);
+    const historicRepeats = _countSetOverlap(roundPairs, allHistoricPairs);
+    const score = (3 * recentRepeats) + historicRepeats;
+
+    if (score === 0) return { lineup: candidate, notice: null };
+    if (score < bestScore) {
+      bestScore = score;
       bestResult = candidate;
     }
-    // Balanced/tiered are deterministic — no point retrying
-    if (mode !== 'random') break;
   }
 
   return {
@@ -11282,16 +11396,27 @@ function _generateRoundWithRotation(playerPool, courts, mode, usedPairs, restedP
   };
 }
 
-function _countRepeatPairs(lineup, usedPairs) {
-  let count = 0;
+// Build a Set of all partner pairs and opponent cross-pairs for a round lineup.
+// Keys are sorted player-id pairs joined by '|' — same format for both pair types
+// so the blacklist treats "played with" and "played against" equivalently.
+function _buildRoundPairs(lineup) {
+  const pairs = new Set();
   lineup.forEach(court => {
-    [court.teamA, court.teamB].forEach(team => {
-      if (team.length === 2) {
-        const key = [team[0], team[1]].sort().join('|');
-        if (usedPairs.has(key)) count++;
-      }
-    });
+    const teamA = court.teamA.filter(Boolean);
+    const teamB = court.teamB.filter(Boolean);
+    // Partner pairs
+    if (teamA.length === 2) pairs.add([teamA[0], teamA[1]].sort().join('|'));
+    if (teamB.length === 2) pairs.add([teamB[0], teamB[1]].sort().join('|'));
+    // Opponent cross-pairs
+    teamA.forEach(pa => teamB.forEach(pb => pairs.add([pa, pb].sort().join('|'))));
   });
+  return pairs;
+}
+
+// Count how many keys in setA also appear in setB.
+function _countSetOverlap(setA, setB) {
+  let count = 0;
+  setA.forEach(k => { if (setB.has(k)) count++; });
   return count;
 }
 
