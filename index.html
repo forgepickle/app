@@ -2,9 +2,39 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.1.0 — Score Entry UX              ║
-  ║  Date: 2026-05-18                            ║
-  ║  Changes: Score inputs switched to           ║
+  ║  Version: 8.3.0 — Multi-User Session Sync   ║
+  ║  Date: 2026-05-22                            ║
+  ║  Changes: Session View now auto-syncs while  ║
+  ║           open. 15s background poll fetches  ║
+  ║           latest session state and re-renders║
+  ║           court cards silently. On phone     ║
+  ║           unlock (visibilitychange), an      ║
+  ║           immediate refresh fires with a     ║
+  ║           sync overlay blocking stale taps   ║
+  ║           (shown only if hidden >10s).       ║
+  ║           _startSessionSync / _stopSession-  ║
+  ║           Sync / _doSessionSyncRefresh.      ║
+  ║           Re-render guards: skipped during   ║
+  ║           swapMode, End Session modal, and   ║
+  ║           Delete modal. activeSession updated║
+  ║           silently in all guarded cases.     ║
+  ║           _showSessionView gains preserveTab ║
+  ║           param — sync re-renders pass true  ║
+  ║           to keep player on active round.    ║
+  ║           Null session from backend closes   ║
+  ║           view with info toast. Interval and ║
+  ║           listener cleared by closeSession-  ║
+  ║           View, _resetAppUI, exitDemoMode.   ║
+  ║                                              ║
+  ║  v8.2.1 — Top 3s Leaderboard tab            ║
+  ║           Win Streak, Best Synergies + 7     ║
+  ║           Alpha metrics, alpha cache         ║
+  ║           pre-warming, partial paywall gate. ║
+  ║           Demo-to-production state isolation ║
+  ║           fix for Top 3s panel.              ║
+  ║                                              ║
+  ║  v8.1.0 — Score Entry UX                    ║
+  ║           Score inputs switched to           ║
   ║           type=text inputmode=numeric so     ║
   ║           iOS shows numeric keyboard.        ║
   ║           Enter key advances to next enabled ║
@@ -3771,6 +3801,34 @@ body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 16px clamp(12px, 4vw, 20px) 24px;
+  position: relative; /* anchor for #sessionSyncOverlay */
+}
+/* Session sync overlay — covers court cards during visibilitychange refresh */
+#sessionSyncOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15,15,15,0.78);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 10;
+  border-radius: 0;
+}
+.session-sync-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255,255,255,0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+.session-sync-label {
+  font-size: 13px;
+  color: rgba(255,255,255,0.65);
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 .session-view-footer {
   flex-shrink: 0;
@@ -4875,6 +4933,12 @@ body {
       <div id="sessionViewCourtCards"></div>
       <!-- Bench section (always visible when bench players exist) -->
       <div id="sessionViewBenchSection"></div>
+      <!-- Sync overlay: shown on visibilitychange restore after long absence.
+           Blocks court-card taps while the latest session state is fetched. -->
+      <div id="sessionSyncOverlay" style="display:none;">
+        <div class="session-sync-spinner"></div>
+        <span class="session-sync-label">Syncing…</span>
+      </div>
     </div>
 
     <!-- Fixed footer -->
@@ -5541,6 +5605,11 @@ let _svPreSwapLineup = null;
 let lastKnownVersion = 0;
 let syncInterval = null;
 
+// == Session sync state (polls getSession every 15s while Session View is open) ==
+let sessionSyncInterval    = null;  // setInterval ID for 15s session poll
+let _sessionVisibilityHandler = null; // stored visibilitychange listener ref for clean removal
+let _sessionHiddenAt       = null;  // timestamp when page became hidden (for overlay threshold)
+
 // == Admin state ==
 let isAdminUnlocked  = false; // true after successful adminLogin this session
 let adminLastExport  = '';    // populated from getConfig response + updated on push
@@ -5853,6 +5922,8 @@ function _resetAppUI() {
   if (adminTapTimer) { clearTimeout(adminTapTimer); adminTapTimer = null; }
   // Tear down admin pw keyboard listener if it was active
   _teardownAdminPwVV();
+  // Safety: stop session polling if app resets while session view was open
+  _stopSessionSync();
 }
 
 function showPasswordScreen() {
@@ -5908,8 +5979,9 @@ function exitDemoMode() {
   // Reset full UI to clean pre-login state
   _resetAppUI();
 
-  // Clear any running sync interval
+  // Clear any running sync intervals
   if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
+  _stopSessionSync(); // Safety: clear session sync if active during demo exit
 
   // Show fresh password screen
   document.getElementById('pwInput').value = '';
@@ -6246,6 +6318,12 @@ function _clearRenderedScreens() {
   const matchCount = document.getElementById('matchCountLabel');
   if (matchWrap) matchWrap.innerHTML = '';
   if (matchCount) matchCount.textContent = '';
+
+  // Reset tab states to first tab so demo navigation never leaks into production.
+  // Both functions update the JS state variable AND the DOM pill/panel active classes
+  // in one call — idempotent when already on 'individual'.
+  switchLbTab('individual');
+  switchAnalyticsTab('individual');
 }
 
 // ==========================================================
@@ -6288,9 +6366,114 @@ async function refreshAllData() {
     // Fetch session after players/matches — sequential, non-blocking on failure
     await fetchActiveSession();
     renderLeaderboard(); // calls renderShuffleEntryButton() internally
+    // If user is looking at Top 3s when refresh fires, render it immediately.
+    // renderLeaderboard() skips Top 3s (lazy tab); this closes that gap.
+    // alphaCache is already warmed above so renderTop3s() has everything it needs.
+    if (currentLbTab === 'top3s' && top3sDirty) renderTop3s();
     if (currentScreen === 'matches') _renderMatchList();
   } catch(e) {
     console.warn('refreshAllData failed:', e.message);
+  }
+}
+
+// ==========================================================
+// SESSION SYNC — 15s poll + visibilitychange while Session View is open
+// ==========================================================
+
+// Start session polling. Called by _fetchAndShowSessionView() once the view
+// is live. Stopped by closeSessionView() and as a safety net by
+// _resetAppUI() and exitDemoMode().
+function _startSessionSync() {
+  if (isDemoMode) return; // Demo session is local-only — no backend polling needed
+  _stopSessionSync();     // Clear any existing interval / listener before starting fresh
+
+  _sessionHiddenAt = null;
+
+  // visibilitychange: fires when player locks phone, switches app, or returns.
+  // On restore, trigger an immediate refresh if the page was hidden >10s —
+  // long enough that meaningful changes (another court logging) could have occurred.
+  // Show the sync overlay to block stale court-card taps for the 1-2s fetch duration.
+  _sessionVisibilityHandler = function() {
+    if (document.hidden) {
+      _sessionHiddenAt = Date.now();
+    } else {
+      const hiddenMs = _sessionHiddenAt ? (Date.now() - _sessionHiddenAt) : 0;
+      _sessionHiddenAt = null;
+      _doSessionSyncRefresh(hiddenMs > 10000); // Show overlay only if hidden >10s
+    }
+  };
+  document.addEventListener('visibilitychange', _sessionVisibilityHandler);
+
+  // 15s background poll — keeps session view current while app is visible.
+  // No overlay for routine polls (silent update).
+  sessionSyncInterval = setInterval(() => {
+    _doSessionSyncRefresh(false);
+  }, 15000);
+}
+
+// Stop all session sync activity: clear interval, remove listener, hide overlay.
+function _stopSessionSync() {
+  if (sessionSyncInterval) { clearInterval(sessionSyncInterval); sessionSyncInterval = null; }
+  if (_sessionVisibilityHandler) {
+    document.removeEventListener('visibilitychange', _sessionVisibilityHandler);
+    _sessionVisibilityHandler = null;
+  }
+  _sessionHiddenAt = null;
+  const overlay = document.getElementById('sessionSyncOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+// Core sync refresh. Fetches latest session from backend and re-renders if safe.
+// showOverlay: true = block court cards during fetch (used on visibility restore).
+async function _doSessionSyncRefresh(showOverlay) {
+  if (isDemoMode) return;
+
+  // If session view is no longer visible, stop the sync entirely.
+  const svOverlay = document.getElementById('sessionViewOverlay');
+  if (!svOverlay || !svOverlay.classList.contains('show')) {
+    _stopSessionSync();
+    return;
+  }
+
+  const syncOverlay = document.getElementById('sessionSyncOverlay');
+  if (showOverlay && syncOverlay) syncOverlay.style.display = 'flex';
+
+  try {
+    const res = await callBackend(getPayload('getSession'));
+
+    // Session was deleted or ended by another player while this player was away.
+    if (!res.ok || !res.session) {
+      _stopSessionSync();
+      closeSessionView();
+      renderShuffleEntryButton();
+      showToast('Session was ended by another player', 'info');
+      return;
+    }
+
+    // Update local session state with latest backend data.
+    activeSession = res.session;
+
+    // Re-render guards — skip DOM update if player is in a disruptive interaction:
+    //   swap mode: UI is rendered inside session-view-body; re-render would wipe it
+    //   End Session modal open: player is mid-confirm; re-render behind modal is distracting
+    //   Delete Session modal open: same reason
+    // In all guarded cases, activeSession is already updated above so the next
+    // natural re-render (exiting swap, closing modal) will show the fresh data.
+    const endModal    = document.getElementById('endSessionModal');
+    const deleteModal = document.getElementById('deleteSessionModal');
+    const safeToRender = !shuffle.swapMode
+      && !(endModal    && endModal.classList.contains('show'))
+      && !(deleteModal && deleteModal.classList.contains('show'));
+
+    if (safeToRender) {
+      // preserveTab:true — do not reset the active round tab on sync re-renders.
+      _showSessionView(activeSession, true);
+    }
+  } catch(e) {
+    // Non-fatal — silently absorb network errors; user can still interact.
+    console.warn('[Forge] Session sync failed:', e.message);
+  } finally {
+    if (syncOverlay) syncOverlay.style.display = 'none';
   }
 }
 
@@ -6348,6 +6531,10 @@ function openDebriefModal(matchId) {
   document.getElementById('debriefModal').classList.add('show');
 }
 function closeDebriefModal() {
+  // Clear any inline transform left by an in-flight swipe gesture so the CSS
+  // translateY(100%) close animation takes over cleanly.
+  const _ds = document.querySelector('#debriefModal .modal-sheet');
+  if (_ds) { _ds.style.transition = ''; _ds.style.transform = ''; }
   document.getElementById('debriefModal').classList.remove('show');
   _debriefMatchId = null;
 }
@@ -9703,6 +9890,75 @@ document.addEventListener('DOMContentLoaded', function() {
   const dm = document.getElementById('debriefModal');
   if (dm) dm.addEventListener('click', function(e) { if (e.target === this) closeDebriefModal(); });
 
+  // ── Debrief modal swipe-to-dismiss ──────────────────────────────────────
+  // Attached once at init (not per open/close) — overlay has pointer-events:none
+  // when .show is absent so listeners are inert when modal is closed.
+  // Pattern: when sheet is scrolled to top and finger drags down, sheet follows
+  // the finger via translateY. Release above threshold dismisses; below springs back.
+  (function() {
+    const sheet = document.querySelector('#debriefModal .modal-sheet');
+    if (!sheet) return;
+    const THRESHOLD  = 80;  // px of downward travel to trigger dismiss
+    const BRAKE      = 0.5; // resistance factor — sheet moves at half finger speed
+    let startY       = 0;
+    let dragging     = false;
+    let currentDeltaY = 0;
+
+    function springBack() {
+      sheet.style.transition = ''; // restore CSS transition
+      sheet.style.transform  = ''; // CSS .modal-overlay.show .modal-sheet takes over → translateY(0)
+    }
+
+    sheet.addEventListener('touchstart', function(e) {
+      // Only arm if at top of scroll — otherwise let internal scroll run
+      if (sheet.scrollTop !== 0) return;
+      startY    = e.touches[0].clientY;
+      dragging  = false;
+      currentDeltaY = 0;
+    }, { passive: true });
+
+    sheet.addEventListener('touchmove', function(e) {
+      if (sheet.scrollTop !== 0) return; // mid-scroll — hand off to native scroll
+      const rawDelta = e.touches[0].clientY - startY;
+      if (rawDelta <= 0) return;         // upward drag — hand off to native scroll
+
+      dragging = true;
+      currentDeltaY = rawDelta;
+
+      // Suppress native scroll so sheet can move instead
+      e.preventDefault();
+
+      // Kill transition during drag so sheet tracks finger in real time
+      sheet.style.transition = 'none';
+      sheet.style.transform  = 'translateY(' + (rawDelta * BRAKE) + 'px)';
+    }, { passive: false });
+
+    function onEnd(e) {
+      if (!dragging) return;
+      dragging = false;
+      const finalDelta = e.changedTouches ? e.changedTouches[0].clientY - startY : currentDeltaY;
+      if (finalDelta * BRAKE >= THRESHOLD) {
+        // Over threshold — animate sheet down then close
+        sheet.style.transition = 'transform 0.25s cubic-bezier(0.32,0.72,0,1)';
+        sheet.style.transform  = 'translateY(100%)';
+        setTimeout(closeDebriefModal, 220);
+      } else {
+        // Under threshold — spring back
+        springBack();
+      }
+      currentDeltaY = 0;
+    }
+
+    sheet.addEventListener('touchend',    onEnd, { passive: true });
+    sheet.addEventListener('touchcancel', function() {
+      // Interrupted gesture (incoming call, system swipe) — always spring back
+      dragging = false;
+      currentDeltaY = 0;
+      springBack();
+    }, { passive: true });
+  })();
+  // ────────────────────────────────────────────────────────────────────────
+
   // Date input change handler
   const de = document.getElementById('matchDate');
   if (de) de.addEventListener('change', function() { am.date = this.value; validateStep(4); });
@@ -10548,12 +10804,17 @@ async function _fetchAndShowSessionView() {
     activeSession = (res.ok && res.session) ? res.session : null;
     document.getElementById('sessionViewOverlay').classList.add('show');
     _showSessionView(activeSession);
+    // Begin 15s session sync polling + visibilitychange listener now that the
+    // view is live. _stopSessionSync() is called by closeSessionView().
+    _startSessionSync();
   } catch(e) {
     showError('Could not load session: ' + e.message);
   }
 }
 
-function _showSessionView(session) {
+// preserveTab: pass true from sync re-renders to avoid snapping player back to Round 1.
+// On initial open (false default), always reset to Round 1 so tab state is clean.
+function _showSessionView(session, preserveTab = false) {
   document.getElementById('sessionViewSkeleton').style.display = 'none';
   if (!session) {
     document.getElementById('sessionViewOverlay').classList.remove('show');
@@ -10565,8 +10826,8 @@ function _showSessionView(session) {
   const meta = document.getElementById('sessionViewMeta');
   if (meta) meta.textContent = modeLabel + ' · ' + session.playerIds.length + ' Players · ' + session.rounds + ' Round' + (session.rounds > 1 ? 's' : '');
 
-  // Always reset to Round 1 BEFORE building tab HTML so active class is applied correctly
-  shuffle.activeRoundTab = 0;
+  // Reset to Round 1 on initial open only — preserve active tab on sync re-renders
+  if (!preserveTab) shuffle.activeRoundTab = 0;
 
   // Round tabs — tabWrap always visible (pencil lives there); only toggle tabsEl
   const tabsEl = document.getElementById('sessionViewRoundTabs');
@@ -10616,6 +10877,9 @@ function switchSessionViewRoundTab(idx) {
 }
 
 function closeSessionView() {
+  // Stop polling before hiding the overlay — prevents a late-arriving response
+  // from calling _showSessionView() after the overlay is already closed.
+  _stopSessionSync();
   document.getElementById('sessionViewOverlay').classList.remove('show');
   // Always clean up swap mode — removes the CSS class from the cards container
   // so players don't wiggle on next open even if closeSessionView is called mid-swap
