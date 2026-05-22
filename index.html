@@ -2,31 +2,26 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.3.0 — Multi-User Session Sync   ║
+  ║  Version: 8.4.0 — Full Multi-User Sync      ║
   ║  Date: 2026-05-22                            ║
-  ║  Changes: Session View now auto-syncs while  ║
-  ║           open. 15s background poll fetches  ║
-  ║           latest session state and re-renders║
-  ║           court cards silently. On phone     ║
-  ║           unlock (visibilitychange), an      ║
-  ║           immediate refresh fires with a     ║
-  ║           sync overlay blocking stale taps   ║
-  ║           (shown only if hidden >10s).       ║
-  ║           _startSessionSync / _stopSession-  ║
-  ║           Sync / _doSessionSyncRefresh.      ║
-  ║           Re-render guards: skipped during   ║
-  ║           swapMode, End Session modal, and   ║
-  ║           Delete modal. activeSession updated║
-  ║           silently in all guarded cases.     ║
-  ║           _showSessionView gains preserveTab ║
-  ║           param — sync re-renders pass true  ║
-  ║           to keep player on active round.    ║
-  ║           Null session from backend closes   ║
-  ║           view with info toast. Interval and ║
-  ║           listener cleared by closeSession-  ║
-  ║           View, _resetAppUI, exitDemoMode.   ║
+  ║  Changes: Two sync gaps closed.              ║
+  ║           (1) TC1 fix: _startSessionSync()   ║
+  ║           was missing from saveShuffleSession║
+  ║           (host path) and stepBack() (back   ║
+  ║           from Add Match). Both paths now    ║
+  ║           start the 15s session poll so all  ║
+  ║           court cards sync regardless of how ║
+  ║           the session view was opened.       ║
+  ║           (2) Entry button + nav dot sync:   ║
+  ║           startBackgroundSync() interval     ║
+  ║           reduced from 5 min to 15s. getVer-║
+  ║           sion is a cheap JSONP GET (no auth,║
+  ║           no sheet read) — all phones now    ║
+  ║           detect session created/ended/delet-║
+  ║           ed within 15s and update the entry ║
+  ║           button and pulsing nav dot.        ║
   ║                                              ║
-  ║  v8.2.1 — Top 3s Leaderboard tab            ║
+  ║  v8.3.0 — Multi-User Session Sync           ║
   ║           Win Streak, Best Synergies + 7     ║
   ║           Alpha metrics, alpha cache         ║
   ║           pre-warming, partial paywall gate. ║
@@ -6344,7 +6339,7 @@ function startBackgroundSync() {
     } catch(e) {
       console.warn('Background sync failed:', e.message);
     }
-  }, 5 * 60 * 1000);
+  }, 15000); // 15s — getVersion is a cheap JSONP GET (no auth, no sheet read); fast enough for session state changes
 }
 
 async function refreshAllData() {
@@ -7858,6 +7853,7 @@ function stepBack() {
     _doNavigateTo('leaderboard');
     document.getElementById('sessionViewOverlay').classList.add('show');
     _showSessionView(isDemoMode ? demoSession : activeSession);
+    _startSessionSync(); // Resume 15s poll — session view is live again after back-tap
     return;
   }
   if (am.step > 1) showStep(am.step - 1);
@@ -10527,6 +10523,7 @@ async function saveShuffleSession() {
     document.getElementById('shuffleWizardOverlay').classList.remove('show');
     document.getElementById('sessionViewOverlay').classList.add('show');
     _showSessionView(activeSession);
+    _startSessionSync(); // Host path: session view opened without _fetchAndShowSessionView — start 15s poll now
   } catch(e) {
     if (btn)    { btn.disabled = false; btn.classList.remove('loading'); }
     if (backBtn)  backBtn.disabled = false;
