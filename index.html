@@ -8210,7 +8210,8 @@ async function submitMatch() {
       const res = await callBackend(getPayload('addMatch', {
         date: am.date, teamA: am.teamA, teamB: am.teamB,
         scoring: am.scoring, points: am.points,
-        scores: am.scores, requestId: makeRequestId()
+        scores: am.scores, requestId: makeRequestId(),
+        sessionSource: am.sessionSource || null  // backend stamps session.logged atomically (v3.12+)
       }));
       ratingChanges  = res.ratingChanges;
       updatedPlayers = res.updatedPlayers;
@@ -8222,9 +8223,14 @@ async function submitMatch() {
       });
       matches.push(matchRecord);
       lastKnownVersion = res.writeVersion || lastKnownVersion;
-      // Update session logged state if this match came from a session court
+      // Update session logged state if this match came from a session court.
+      // If the backend returned an atomically-stamped session (v3.12+), adopt it
+      // and skip the redundant saveSession call. Falls back to the legacy path
+      // when updatedSession is absent (pre-v3.12 GAS deployment).
       if (am.sessionSource) {
-        onSessionMatchLogged(am.sessionSource.round, am.sessionSource.court, matchRecord.id);
+        const skipSave = !!res.updatedSession;
+        if (skipSave) activeSession = res.updatedSession;
+        onSessionMatchLogged(am.sessionSource.round, am.sessionSource.court, matchRecord.id, skipSave);
       }
     }
 
@@ -11194,7 +11200,7 @@ function viewSessionMatch(matchId) {
 }
 
 // Called from Add Match submit success to update session logged state
-async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId) {
+async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId, skipSave = false) {
   const session = isDemoMode ? demoSession : activeSession;
   if (!session) return;
 
@@ -11210,7 +11216,10 @@ async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId) {
   }
   // Re-evaluate pencil + footer state immediately after logging
   _updateSessionViewFooterState();
-  // Persist updated logged state to backend
+  // skipSave: true when the backend already stamped session.logged atomically
+  // inside actionAddMatch (v3.12+). No separate saveSession call needed.
+  if (skipSave) return;
+  // Legacy / fallback path: separate saveSession call (pre-v3.12 GAS or non-session match)
   try {
     await callBackend(getPayload('saveSession', { session: session, requestId: makeRequestId() }));
     activeSession = session;
