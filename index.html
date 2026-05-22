@@ -8339,7 +8339,7 @@ function renderTop3s() {
     // Tiebreaker: ID of player's most recently submitted match (m{timestamp} — lexicographic = chronological)
     const lastId = allPMatches.length > 0 ? (allPMatches[allPMatches.length - 1].id || '') : '';
     return { name: p.name, value: streak, lastId: lastId };
-  }).filter(function(x) { return x.value > 0; })
+  }).filter(function(x) { return x.value >= 2; })
     .sort(function(a, b) {
       if (b.value !== a.value) return b.value - a.value;   // higher streak first
       return b.lastId.localeCompare(a.lastId);              // tie: most recently active first
@@ -9958,7 +9958,7 @@ const TOOLTIPS = {
   alphaDna:         { title: 'Player DNA',             body: 'Your competitive fingerprint across five axes:\n\n• Dominance — average scoring margin when you win, shows ceiling.\n• Resilience — win rate in close games (margin ≤2), shows mental edge.\n• Reliability — consistency of performance; low variance = high reliability.\n• Collaborator — uplift you give partners versus their baseline.\n• Disruptor — win rate against opponents rated above you.\n\nThe pentagon shape reveals your playstyle archetype.' },
   alphaCorridor:    { title: 'Performance Corridor',   body: 'Shows the range between your best and worst performances over all your matches (10th to 90th percentile point margins), with a needle marking your last 5 matches average.\n\n📈 Best: Needle at the top of a tight corridor — consistently dominant.\n📉 Worst: Needle at the bottom — recent form has dipped.\n〰 Wide corridor — high variance; big wins and big losses.' },
   // Top 3s tooltips
-  top3sStreak:       { title: 'Current Win Streak',      body: 'Number of consecutive wins from the most recent match. Resets to zero on any loss or tie. Only players currently on a winning run appear here.\n\nMin: 1 win to qualify.' },
+  top3sStreak:       { title: 'Current Win Streak',      body: 'Number of consecutive wins from the most recent match. Resets to zero on any loss or tie. Only players currently on a winning run appear here.\n\nMin: 2 consecutive wins to qualify.' },
   top3sBestSynergy:  { title: 'Best Synergies',          body: 'Top pairs by synergy score — how much better (or worse) they perform together compared to what their individual ratings predict. Positive means they elevate each other.\n\n⚡ Best: above +0.20 — real chemistry!\n〰 Near zero — playing to their ratings.\n\nMin: 2 matches as a pair to qualify.' },
   top3sAttribution:  { title: 'Individual Attribution',  body: 'Measures how much a player personally moves the scoreboard regardless of partner. Calculated as average point margin contribution weighted by match recency — recent matches count more.\n\n📈 Best: High positive — lifts any partnership.\n📉 Worst: Negative — partners tend to score better without them.\n\nMin: 1 match to qualify.' },
   top3sAtTheirPeak:  { title: 'At Their Peak',           body: 'How close a player\'s recent form (last 5 match average) is to their career ceiling (90th percentile). Positive means they are currently above their historical peak.\n\n📈 Best: Positive — performing above their own ceiling right now.\n📉 Worst: Large negative — significant gap between current and peak form.\n\nMin: 2 matches to qualify.' },
