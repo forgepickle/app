@@ -8186,6 +8186,27 @@ async function submitMatch() {
 
     } else {
       // ── REAL PATH: backend computes, returns authoritative state ──
+
+      // Conflict guard: check BEFORE the addMatch backend call.
+      // The 15s background sync silently updates activeSession — so by the time
+      // the player finishes the Add Match wizard, another player may have already
+      // logged this court. Catching it here prevents the match from being saved
+      // at all, avoiding orphaned matches and double rating changes.
+      if (am.sessionSource) {
+        const src = am.sessionSource;
+        const alreadyLogged = activeSession
+          && activeSession.logged[src.round]
+          && activeSession.logged[src.round][src.court];
+        if (alreadyLogged) {
+          document.getElementById('submittingOverlay').classList.remove('show');
+          document.getElementById('stepProgress').style.display = 'flex';
+          document.getElementById('stepNav').style.display = 'flex';
+          showStep(am.step);
+          showToast('Court already logged by another player', 'info');
+          return; // finally { unlockUI() } still runs
+        }
+      }
+
       const res = await callBackend(getPayload('addMatch', {
         date: am.date, teamA: am.teamA, teamB: am.teamB,
         scoring: am.scoring, points: am.points,
@@ -11175,16 +11196,9 @@ async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId) {
   const session = isDemoMode ? demoSession : activeSession;
   if (!session) return;
 
-  // Conflict guard: another player may have logged this court while this player
-  // was filling in the Add Match wizard. The background sync updates activeSession
-  // silently — so by the time we reach here, session.logged[round][court] may
-  // already be filled. Overwriting it would orphan the other player's match and
-  // double-count ratings. Reject the duplicate and let the player know.
-  if (session.logged[roundIdx] && session.logged[roundIdx][courtIdx]) {
-    showToast('Court already logged by another player', 'info');
-    return;
-  }
-
+  // Note: conflict guard lives in submitMatch() — checked before addMatch backend
+  // call so no match is saved at all. By the time we reach here the guard has
+  // already passed, so writing the logged slot is safe.
   session.logged[roundIdx][courtIdx] = newMatchId;
   if (isDemoMode) {
     demoSession = session;
