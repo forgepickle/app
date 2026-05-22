@@ -2,27 +2,27 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.6.0 — 10-Round Shuffle          ║
+  ║  Version: 8.7.0 — Bug Fix Pass              ║
   ║  Date: 2026-05-22                            ║
-  ║  Changes: Three enhancements to Shuffle.     ║
-  ║           (1) Rounds expanded from 3 to 10.  ║
-  ║           Rounds pill selector replaced with ║
-  ║           a stepper control (- / N / +),     ║
-  ║           aligned to match Courts row width. ║
-  ║           (2) Round tab strip now scrollable ║
-  ║           (overflow-x: auto) in both Wizard  ║
-  ║           and Session View. Pills use natural ║
-  ║           width. Pencil icon stays pinned at ║
-  ║           right end of tab row.              ║
-  ║           (3) Algorithm upgrade: sliding     ║
-  ║           window blacklist (last 2 rounds),  ║
-  ║           opponent cross-pair tracking, and  ║
-  ║           weighted scoring (3x recent, 1x    ║
-  ║           historic). Balanced/Tiered now get ║
-  ║           up to 20 jitter-varied attempts    ║
-  ║           (break removed — jitter is random).║
+  ║  Changes: Four fixes.                        ║
+  ║           (1) Sync overlay extended to cover ║
+  ║           round tabs + pencil row via new    ║
+  ║           .session-view-content wrapper      ║
+  ║           (position:relative flex column).   ║
+  ║           (2) Duplicate court guard moved    ║
+  ║           to submitMatch() BEFORE addMatch   ║
+  ║           backend call — no match saved if   ║
+  ║           conflict. Toast: "Match already    ║
+  ║           logged by another player". Returns ║
+  ║           player to review step.             ║
+  ║           (3) Sit-out warning now tracks     ║
+  ║           cumulative rest counts (not just   ║
+  ║           consecutive). Shows real count:    ║
+  ║           "twice" for 2, "X times" for 3+.  ║
+  ║           Multiple players listed with each  ║
+  ║           count, sorted worst-first.         ║
   ║                                              ║
-  ║  v8.5.0 — Sync Polish + Conflict Guard      ║
+  ║  v8.6.0 — 10-Round Shuffle                  ║
   ║           Win Streak, Best Synergies + 7     ║
   ║           Alpha metrics, alpha cache         ║
   ║           pre-warming, partial paywall gate. ║
@@ -5164,7 +5164,7 @@ body {
 </div>
 
 <!-- Admin Password Modal — outside appShell, z-index 700 -->
-<div class="modal-overlay" id="adminPwModal" onclick="if(event.target===this) closeAdminPwModal()">
+<div class="modal-overlay" id="adminPwModal">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
     <div class="modal-title">ADMIN ACCESS</div>
@@ -8202,7 +8202,7 @@ async function submitMatch() {
           document.getElementById('stepProgress').style.display = 'flex';
           document.getElementById('stepNav').style.display = 'flex';
           showStep(am.step);
-          showToast('Court already logged by another player', 'info');
+          showToast('Match already logged by another player', 'info');
           return; // finally { unlockUI() } still runs
         }
       }
@@ -10162,13 +10162,15 @@ function openShuffleWizard() {
   // Reset generate button
   const genBtn = document.getElementById('shGenerateBtn');
   if (genBtn) genBtn.disabled = true;
-  // Clear courts/rounds pills — no default selection
+  // Clear court pills — no default selection
   [1,2,3].forEach(i => {
     const c = document.getElementById('shCourt' + i);
     if (c) c.classList.remove('active');
-    const r = document.getElementById('shRound' + i);
-    if (r) r.classList.remove('active');
   });
+  // Reset rounds stepper to 1 — rounds were converted from pills to a stepper in
+  // v8.6.0; the old shRound1/2/3 pill reset is gone. setShuffleRounds updates
+  // both shuffle.rounds and the stepper DOM (val text + ± disabled states).
+  setShuffleRounds(1);
   // Reset date input — default to today; enforce today as earliest selectable date
   const dateEl = document.getElementById('shSessionDate');
   if (dateEl) { dateEl.value = getTodayStr(); dateEl.min = getTodayStr(); }
@@ -11290,6 +11292,7 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
   let restedPlayers  = [];
   let notice = null;
   let doubleRestWarning = null;
+  const restCounts = {}; // playerId → total rounds sat out across all rounds so far
 
   for (let r = 0; r < rounds; r++) {
     // recentPairs = union of last 2 rounds' pair sets
@@ -11306,12 +11309,24 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
     const playedIds = new Set(result.lineup.flatMap(court => [...court.teamA, ...court.teamB]));
     const newRested = selectedPlayers.filter(p => !playedIds.has(p.id));
 
-    // Double-rest advisory
-    if (r > 0 && newRested.some(p => restedPlayers.find(rp => rp.id === p.id))) {
-      const doubleRestNames = newRested
-        .filter(p => restedPlayers.find(rp => rp.id === p.id))
-        .map(p => p.name).join(', ');
-      doubleRestWarning = doubleRestNames + (newRested.length === 1 ? ' sits' : ' sit') + ' out twice — add a round or adjust courts to balance';
+    // Cumulative sit-out tracking — update counts for every player benched this round
+    newRested.forEach(p => { restCounts[p.id] = (restCounts[p.id] || 0) + 1; });
+
+    // Multi-rest advisory: any player who has sat out more than once so far.
+    // Rebuild after every round so the final warning reflects the full session.
+    // Sorted by most sit-outs first so the worst offender leads the message.
+    const multiResters = selectedPlayers
+      .filter(p => (restCounts[p.id] || 0) > 1)
+      .sort((a, b) => (restCounts[b.id] || 0) - (restCounts[a.id] || 0));
+    if (multiResters.length > 0) {
+      const _restLabel = n => n === 2 ? 'twice' : n + ' times';
+      if (multiResters.length === 1) {
+        const p = multiResters[0];
+        doubleRestWarning = p.name + ' sits out ' + _restLabel(restCounts[p.id]) + ' — add a round or adjust courts to balance';
+      } else {
+        const parts = multiResters.map(p => p.name + ' (' + _restLabel(restCounts[p.id]) + ')').join(', ');
+        doubleRestWarning = parts + ' sit out multiple times — add a round or adjust courts to balance';
+      }
     }
 
     // Build this round's pair set (partner pairs + opponent cross-pairs)
