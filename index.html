@@ -10378,6 +10378,7 @@ function _renderShuffleResult() {
         `<button class="toggle-pill${i === shuffle.activeRoundTab ? ' active' : ''}" type="button" onclick="switchShuffleRoundTab(${i})">Round ${i+1}</button>`
       ).join('');
       tabsEl.style.display = 'flex';
+      tabsEl.scrollLeft = 0;
     } else {
       tabsEl.style.display = 'none';
     }
