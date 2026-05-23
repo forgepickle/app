@@ -2,9 +2,9 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.8.0 — iOS Sync + Session End Fix║
+  ║  Version: 8.8.1 — Toast Timing Fix          ║
   ║  Date: 2026-05-23                            ║
-  ║  Changes: Three fixes.                        ║
+  ║  Changes: One fix.                        ║
   ║           (1) Sync overlay extended to cover ║
   ║           round tabs + pencil row via new    ║
   ║           .session-view-content wrapper      ║
@@ -5702,6 +5702,10 @@ let sessionSyncInterval    = null;  // setInterval ID for 15s session poll
 let _sessionVisibilityHandler = null; // stored visibilitychange listener ref for clean removal
 let _sessionHiddenAt       = null;  // timestamp when page became hidden (for overlay threshold)
 
+// == Adaptive polling spike state ==
+let syncSpikeTimer        = null;  // setTimeout ID — reverts global sync from 5s back to 15s after a write
+let sessionSyncSpikeTimer = null;  // setTimeout ID — reverts session sync from 5s back to 15s after a write
+
 // == Admin state ==
 let isAdminUnlocked  = false; // true after successful adminLogin this session
 let adminLastExport  = '';    // populated from getConfig response + updated on push
@@ -6012,6 +6016,9 @@ function _resetAppUI() {
   adminTapCount    = 0;
   adminIsExporting = false;
   if (adminTapTimer) { clearTimeout(adminTapTimer); adminTapTimer = null; }
+  // Clear adaptive polling spike timers — prevents orphaned fast-poll after logout or demo exit
+  if (syncSpikeTimer) { clearTimeout(syncSpikeTimer); syncSpikeTimer = null; }
+  if (sessionSyncSpikeTimer) { clearTimeout(sessionSyncSpikeTimer); sessionSyncSpikeTimer = null; }
   // Tear down admin pw keyboard listener if it was active
   _teardownAdminPwVV();
   // Safety: stop session polling if app resets while session view was open
@@ -6432,11 +6439,56 @@ function startBackgroundSync() {
       if (res.writeVersion !== lastKnownVersion) {
         lastKnownVersion = res.writeVersion;
         await refreshAllData();
+      } else if (res.changedAt) {
+        // Phase 2 cross-client spike: another client wrote recently but this client
+        // already has the latest version. Spike poll for the remaining window so we
+        // stay current in case a second write arrives before the 30s window closes.
+        const age = Date.now() - res.changedAt;
+        if (age > 0 && age < 30000) _spikeSync(30000 - age);
       }
     } catch(e) {
       console.warn('Background sync failed:', e.message);
     }
   }, 15000); // 15s — getVersion is a cheap JSONP GET (no auth, no sheet read); fast enough for session state changes
+}
+
+// Temporarily spike the global background sync to 5s for durationMs, then revert to 15s.
+// Called after any successful write so the writing client confirms the change quickly.
+// Re-entry safe: clears any existing spike timer before setting a new one.
+function _spikeSync(durationMs) {
+  if (isDemoMode) return;
+  if (syncSpikeTimer) clearTimeout(syncSpikeTimer);
+  if (syncInterval) clearInterval(syncInterval);
+  syncInterval = setInterval(async () => {
+    if (isDemoMode) return;
+    try {
+      const res = await callBackendGet('getVersion');
+      if (res.writeVersion !== lastKnownVersion) {
+        lastKnownVersion = res.writeVersion;
+        await refreshAllData();
+      }
+    } catch(e) { console.warn('Spike sync failed:', e.message); }
+  }, 5000);
+  syncSpikeTimer = setTimeout(() => {
+    syncSpikeTimer = null;
+    startBackgroundSync(); // Reverts to 15s
+  }, durationMs);
+}
+
+// Temporarily spike the session sync to 5s for durationMs, then revert to 15s.
+// Called after onSessionMatchLogged so session view observers see the court update fast.
+// No-ops if session view is not open (sessionSyncInterval is null).
+function _spikeSessionSync(durationMs) {
+  if (isDemoMode) return;
+  if (!sessionSyncInterval) return; // Session view not open — don't start spurious polling
+  if (sessionSyncSpikeTimer) clearTimeout(sessionSyncSpikeTimer);
+  // Restart session interval at 5s — re-uses _doSessionSyncRefresh (no overlay for routine polls)
+  clearInterval(sessionSyncInterval);
+  sessionSyncInterval = setInterval(() => { _doSessionSyncRefresh(false); }, 5000);
+  sessionSyncSpikeTimer = setTimeout(() => {
+    sessionSyncSpikeTimer = null;
+    _startSessionSync(); // Reverts to 15s + reattaches visibilitychange listener
+  }, durationMs);
 }
 
 async function refreshAllData() {
@@ -6503,9 +6555,10 @@ function _startSessionSync() {
   }, 15000);
 }
 
-// Stop all session sync activity: clear interval, remove listener, hide overlay.
+// Stop all session sync activity: clear interval, spike timer, remove listener, hide overlay.
 function _stopSessionSync() {
   if (sessionSyncInterval) { clearInterval(sessionSyncInterval); sessionSyncInterval = null; }
+  if (sessionSyncSpikeTimer) { clearTimeout(sessionSyncSpikeTimer); sessionSyncSpikeTimer = null; }
   if (_sessionVisibilityHandler) {
     document.removeEventListener('visibilitychange', _sessionVisibilityHandler);
     _sessionVisibilityHandler = null;
@@ -6539,7 +6592,7 @@ async function _doSessionSyncRefresh(showOverlay) {
       activeSession = null;  // clear before render so button shows "Plan the Courts"
       closeSessionView();
       renderShuffleEntryButton();
-      showToast('Session was ended by another player', 'info');
+      setTimeout(() => showToast('Session was ended by another player', 'info'), 300); // delay past 250ms overlay fade — prevents iOS compositor from hiding toast behind fading layer
       return;
     }
 
@@ -7318,6 +7371,7 @@ async function saveEdit() {
     renderPlayers();
     renderAnalytics();
     showToast('Name updated ✓');
+    if (!isDemoMode) _spikeSync(30000);
   } catch(e) {
     showError('Failed to save. Try again.');
     document.getElementById('editModalSaveBtn').disabled = false;
@@ -7405,6 +7459,7 @@ async function confirmAddPlayer() {
     renderPlayers();
     renderAnalytics();
     showToast(newName + ' added ✓');
+    if (!isDemoMode) _spikeSync(30000);
   } catch(e) {
     showError('Failed to add player. Try again.');
   } finally {
@@ -7451,6 +7506,7 @@ async function confirmRemovePlayer() {
     renderPlayers();
     renderAnalytics();
     showToast(player.name + ' removed');
+    if (!isDemoMode) _spikeSync(30000);
   } catch(e) {
     showError('Failed to remove player. Try again.');
     document.getElementById('removeConfirmBtn').disabled = false;
@@ -7503,6 +7559,7 @@ async function confirmReinstate() {
     renderPlayers();
     renderAnalytics();
     showToast(player.name + ' reinstated ✓');
+    if (!isDemoMode) _spikeSync(30000);
   } catch(e) {
     showError('Failed to reinstate. Try again.');
     document.getElementById('reinstateConfirmBtn').disabled = false;
@@ -8236,6 +8293,7 @@ async function submitMatch() {
       });
       matches.push(matchRecord);
       lastKnownVersion = res.writeVersion || lastKnownVersion;
+      _spikeSync(30000); // Adaptive polling: spike global sync so other clients see the new match fast
       // Update session logged state if this match came from a session court.
       // If the backend returned an atomically-stamped session (v3.12+), adopt it
       // and skip the redundant saveSession call. Falls back to the legacy path
@@ -8960,6 +9018,7 @@ async function confirmDeleteMatch() {
     renderAnalytics();
     renderLeaderboard();
     showToast('Match deleted. Ratings updated.');
+    if (!isDemoMode) _spikeSync(30000);
   } catch(e) {
     showError('Failed to delete match. Try again.');
     document.getElementById('deleteMatchConfirmBtn').disabled = false;
@@ -11115,6 +11174,7 @@ async function confirmDeleteSession() {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'Delete failed');
     showToast('Session deleted');
+    _spikeSync(30000); // Adaptive polling: spike so other clients see session cleared fast
   } catch(e) {
     // Rollback: restore session state and reset button back to Active Session
     activeSession = prevSession;
@@ -11175,6 +11235,7 @@ async function confirmEndSession() {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'End failed');
     showToast('Session ended ✓');
+    _spikeSync(30000); // Adaptive polling: spike so other clients see session ended fast
   } catch(e) {
     // Rollback: restore session state and reset button back to Active Session
     activeSession = prevSession;
@@ -11240,6 +11301,7 @@ async function onSessionMatchLogged(roundIdx, courtIdx, newMatchId, skipSave = f
   }
   // Re-evaluate pencil + footer state immediately after logging
   _updateSessionViewFooterState();
+  _spikeSessionSync(30000); // Adaptive polling: spike session sync so observers see court update fast
   // skipSave: true when the backend already stamped session.logged atomically
   // inside actionAddMatch (v3.12+). No separate saveSession call needed.
   if (skipSave) return;
