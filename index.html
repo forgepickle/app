@@ -2,9 +2,9 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.7.0 — Bug Fix Pass              ║
-  ║  Date: 2026-05-22                            ║
-  ║  Changes: Four fixes.                        ║
+  ║  Version: 8.8.0 — iOS Sync + Session End Fix║
+  ║  Date: 2026-05-23                            ║
+  ║  Changes: Three fixes.                        ║
   ║           (1) Sync overlay extended to cover ║
   ║           round tabs + pencil row via new    ║
   ║           .session-view-content wrapper      ║
@@ -21,6 +21,18 @@
   ║           "twice" for 2, "X times" for 3+.  ║
   ║           Multiple players listed with each  ║
   ║           count, sorted worst-first.         ║
+  ║                                              ║
+  ║  v8.8.0 — iOS Sync + Session End Fix   ║
+  ║           (1) _doSessionSyncRefresh: clears ║
+  ║           activeSession in no-session path  ║
+  ║           so Phone B button resets at once. ║
+  ║           (2) confirmEndSession: optimistic  ║
+  ║           close resets overlay + button      ║
+  ║           before GAS call. Rollback on error.║
+  ║           (3) confirmDeleteSession: same      ║
+  ║           optimistic close pattern.          ║
+  ║                                              ║
+  ║  v8.7.0 — Bug Fix Pass (see above)       ║
   ║                                              ║
   ║  v8.6.0 — 10-Round Shuffle                  ║
   ║           Win Streak, Best Synergies + 7     ║
@@ -6524,6 +6536,7 @@ async function _doSessionSyncRefresh(showOverlay) {
     // Session was deleted or ended by another player while this player was away.
     if (!res.ok || !res.session) {
       _stopSessionSync();
+      activeSession = null;  // clear before render so button shows "Plan the Courts"
       closeSessionView();
       renderShuffleEntryButton();
       showToast('Session was ended by another player', 'info');
@@ -11091,16 +11104,21 @@ async function confirmDeleteSession() {
     renderShuffleEntryButton();
     return;
   }
+  // Optimistic close — update UI immediately so button resets without waiting for GAS.
+  // Save prevSession for rollback if the backend call fails.
+  const prevSession = activeSession;
+  activeSession = null;
+  closeSessionView();
+  renderShuffleEntryButton();
   lockUI();
   try {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'Delete failed');
-    activeSession = null;
-    closeSessionView(); // tears down overlay — no button restore needed on success
-    renderShuffleEntryButton();
     showToast('Session deleted');
   } catch(e) {
-    // Restore footer buttons so user can retry or cancel
+    // Rollback: restore session state and reset button back to Active Session
+    activeSession = prevSession;
+    renderShuffleEntryButton();
     if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.classList.remove('loading'); }
     if (swapBtn)   swapBtn.disabled = false;
     if (endBtn)    endBtn.disabled  = false;
@@ -11146,15 +11164,21 @@ async function confirmEndSession() {
     showToast('Session ended ✓');
     return;
   }
+  // Optimistic close — update UI immediately so button resets without waiting for GAS.
+  // Save prevSession for rollback if the backend call fails.
+  const prevSession = activeSession;
+  activeSession = null;
+  closeSessionView();
+  renderShuffleEntryButton();
   lockUI();
   try {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'End failed');
-    activeSession = null;
-    closeSessionView();
-    renderShuffleEntryButton();
     showToast('Session ended ✓');
   } catch(e) {
+    // Rollback: restore session state and reset button back to Active Session
+    activeSession = prevSession;
+    renderShuffleEntryButton();
     if (endBtn)   { endBtn.disabled = false; endBtn.classList.remove('loading'); }
     if (shareBtn)   shareBtn.disabled = false;
     if (swapBtn)    swapBtn.disabled  = false;
