@@ -2,27 +2,27 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.8.1 — Toast Timing Fix          ║
-  ║  Date: 2026-05-23                            ║
-  ║  Changes: One fix.                        ║
-  ║           (1) Sync overlay extended to cover ║
-  ║           round tabs + pencil row via new    ║
-  ║           .session-view-content wrapper      ║
-  ║           (position:relative flex column).   ║
-  ║           (2) Duplicate court guard moved    ║
-  ║           to submitMatch() BEFORE addMatch   ║
-  ║           backend call — no match saved if   ║
-  ║           conflict. Toast: "Match already    ║
-  ║           logged by another player". Returns ║
-  ║           player to review step.             ║
-  ║           (3) Sit-out warning now tracks     ║
-  ║           cumulative rest counts (not just   ║
-  ║           consecutive). Shows real count:    ║
-  ║           "twice" for 2, "X times" for 3+.  ║
-  ║           Multiple players listed with each  ║
-  ║           count, sorted worst-first.         ║
+  ║  Version: 8.9.1 — deleteMatch Browser Replay ║
+  ║  Date: 2026-05-25                            ║
+  ║  Changes:                                    ║
+  ║  (1) Renamed demoComputeRatings() to         ║
+  ║      computeRatings() — now the shared       ║
+  ║      engine for demo mode and production     ║
+  ║      correction flows (delete/recalculate).  ║
+  ║  (2) confirmDeleteMatch() production path:   ║
+  ║      browser replays all ratings locally     ║
+  ║      using computeRatings(), collects        ║
+  ║      matchRatingChanges per match, sends one ║
+  ║      atomic POST to GAS with matchId +       ║
+  ║      updatedPlayers + matchRatingChanges.    ║
+  ║      GAS replay loop eliminated. Resolves    ║
+  ║      GAS timeout risk at 500 matches.        ║
   ║                                              ║
-  ║  v8.8.0 — iOS Sync + Session End Fix   ║
+  ║  v8.9.0 — Adaptive Polling                  ║
+  ║           Flat 15s poll replaced with        ║
+  ║           two-phase spike system.            ║
+  ║                                              ║
+  ║  v8.8.1 — Toast Timing Fix                  ║
   ║           (1) _doSessionSyncRefresh: clears ║
   ║           activeSession in no-session path  ║
   ║           so Phone B button resets at once. ║
@@ -5533,7 +5533,7 @@ function loadDemoData() {
   [...matches]
     .sort((a, b) => a.date.localeCompare(b.date))
     .forEach(m => {
-      const result = demoComputeRatings(m.teamA, m.teamB, m.scores);
+      const result = computeRatings(m.teamA, m.teamB, m.scores);
       if (result) {
         // Store computed ratingChanges on the match object
         m.ratingChanges = result.ratingChanges;
@@ -5564,7 +5564,7 @@ function resetDemoData() {
 // ── Demo-mode local rating computation ──
 // Mirrors Code.gs computeRatings_ exactly.
 // ONLY called in demo mode — never touches backend.
-function demoComputeRatings(teamA, teamB, scores) {
+function computeRatings(teamA, teamB, scores) {
   const kFactor = K_FACTOR, kScale = K_SCALE;
   const p1 = players.find(p => p.id === teamA[0]);
   const p2 = players.find(p => p.id === teamA[1]);
@@ -8229,7 +8229,7 @@ async function submitMatch() {
 
     if (isDemoMode) {
       // ── DEMO PATH: local computation only, zero backend calls ──
-      const result = demoComputeRatings(am.teamA, am.teamB, am.scores);
+      const result = computeRatings(am.teamA, am.teamB, am.scores);
       if (!result) throw new Error('Players not found in demo data.');
 
       ratingChanges  = result.ratingChanges;
@@ -8992,7 +8992,7 @@ async function confirmDeleteMatch() {
 
       // Replay remaining matches chronologically
       [...matches].sort((a, b) => a.date.localeCompare(b.date)).forEach(m => {
-        const result = demoComputeRatings(m.teamA, m.teamB, m.scores);
+        const result = computeRatings(m.teamA, m.teamB, m.scores);
         if (result) {
           result.updatedPlayers.forEach(up => {
             const p = players.find(pl => pl.id === up.id);
@@ -9002,12 +9002,51 @@ async function confirmDeleteMatch() {
       });
 
     } else {
-      // ── REAL PATH: backend does full replay ──
-      const res = await callBackend(getPayload('deleteMatch', { matchId: id, requestId: makeRequestId() }));
-      players = res.updatedPlayers || players;
-      lastKnownVersion = res.writeVersion || lastKnownVersion;
+      // ── REAL PATH: browser replays, one atomic POST to GAS ──
+
+      // 1. Remove deleted match from local array
       const idx = matches.findIndex(m => m.id === id);
       if (idx !== -1) matches.splice(idx, 1);
+
+      // 2. Identify the 4 affected players from the deleted match
+      //    (already removed from matches[] — retrieve from pendingDeleteMatchId context)
+      //    Reset ALL players to their individual starting ratings, then replay
+      players.forEach(p => {
+        const base = p.startingRating || STARTING_RATING;
+        p.rating = base; p.games = 0;
+        p.ratingHistory = [base]; p.last5 = [];
+        p.clutchW = 0; p.clutchL = 0;
+      });
+
+      // 3. Replay all remaining matches chronologically.
+      //    Collect updated ratingChanges per match as we go.
+      const matchRatingChanges = [];
+      [...matches]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .forEach(m => {
+          const result = computeRatings(m.teamA, m.teamB, m.scores);
+          if (result) {
+            // Update in-memory player state
+            result.updatedPlayers.forEach(up => {
+              const p = players.find(pl => pl.id === up.id);
+              if (p) Object.assign(p, up);
+            });
+            // Update in-memory match ratingChanges so debrief is correct this session
+            m.ratingChanges = result.ratingChanges;
+            // Collect for sheet write-back
+            matchRatingChanges.push({ matchId: m.id, ratingChanges: result.ratingChanges });
+          }
+        });
+
+      // 4. One atomic POST: GAS deletes the row, writes player rows,
+      //    writes single-column rating_changes_json update — all in one call
+      const res = await callBackend(getPayload('deleteMatch', {
+        matchId:           id,
+        requestId:         makeRequestId(),
+        updatedPlayers:    players,
+        matchRatingChanges
+      }));
+      lastKnownVersion = res.writeVersion || lastKnownVersion;
     }
 
     buildPairsFromMatches();
