@@ -2,9 +2,17 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.9.1 — deleteMatch Browser Replay ║
-  ║  Date: 2026-05-25                            ║
+  ║  Version: 8.9.2 — Per-Round Rotation Notice  ║
+  ║  Date: 2026-05-26                            ║
   ║  Changes:                                    ║
+  ║  (1) Bug fix: "Best rotation found" notice   ║
+  ║      now tracks per-round instead of a       ║
+  ║      global flag. Notice shows only for      ║
+  ║      rounds that actually had pair repeats   ║
+  ║      and clears when switching to a round    ║
+  ║      with a clean rotation.                  ║
+  ║                                              ║
+  ║  v8.9.1 — deleteMatch Browser Replay        ║
   ║  (1) Renamed demoComputeRatings() to         ║
   ║      computeRatings() — now the shared       ║
   ║      engine for demo mode and production     ║
@@ -10526,16 +10534,7 @@ function _renderShuffleResult() {
 
   // Rotation notice — use visibility so the flex-1 spacer always holds its space,
   // keeping the swap icon pinned to the right even when there is no notice text.
-  const noticeEl = document.getElementById('shuffleRotationNotice');
-  if (noticeEl) {
-    if (shuffle.lineup && shuffle.lineup.notice) {
-      noticeEl.textContent = shuffle.lineup.notice;
-      noticeEl.style.visibility = 'visible';
-    } else {
-      noticeEl.textContent = '';
-      noticeEl.style.visibility = 'hidden';
-    }
-  }
+  _updateRotationNotice();
 
   _renderShuffleCourtCards();
   _renderShuffleAdvisories(selectedPlayers);
@@ -10588,6 +10587,23 @@ function _renderBenchSection(allPlayerIds, round, sectionId, containerId) {
   }
 }
 
+// Update the rotation notice for the currently active round tab.
+// Called on initial render and whenever the active tab changes.
+function _updateRotationNotice() {
+  const noticeEl = document.getElementById('shuffleRotationNotice');
+  if (!noticeEl) return;
+  const msg = shuffle.lineup && shuffle.lineup.noticesPerRound
+    ? shuffle.lineup.noticesPerRound[shuffle.activeRoundTab]
+    : null;
+  if (msg) {
+    noticeEl.textContent = msg;
+    noticeEl.style.visibility = 'visible';
+  } else {
+    noticeEl.textContent = '';
+    noticeEl.style.visibility = 'hidden';
+  }
+}
+
 function switchShuffleRoundTab(idx) {
   // Fully exit swap mode when switching rounds — edits on the previous round are kept
   if (shuffle.swapMode) exitShuffleSwapMode();
@@ -10597,6 +10613,7 @@ function switchShuffleRoundTab(idx) {
   if (tabsEl) {
     tabsEl.querySelectorAll('.toggle-pill').forEach((btn, i) => btn.classList.toggle('active', i === idx));
   }
+  _updateRotationNotice();
   _renderShuffleCourtCards();
 }
 
@@ -11424,7 +11441,7 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
   const recentWindow = [];
   const roundLineups = [];
   let restedPlayers  = [];
-  let notice = null;
+  const noticesPerRound = [];
   let doubleRestWarning = null;
   const restCounts = {}; // playerId → total rounds sat out across all rounds so far
 
@@ -11437,7 +11454,7 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
       ? { lineup: _generateRound(selectedPlayers, courts, mode, restedPlayers, r), notice: null }
       : _generateRoundWithRotation(selectedPlayers, courts, mode, allHistoricPairs, recentPairs, restedPlayers, r);
 
-    if (result.notice) notice = result.notice;
+    noticesPerRound.push(result.notice || null);
 
     // Track rested players for next round
     const playedIds = new Set(result.lineup.flatMap(court => [...court.teamA, ...court.teamB]));
@@ -11477,7 +11494,7 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
     restedPlayers = newRested;
   }
 
-  return { rounds: roundLineups, notice, doubleRestWarning };
+  return { rounds: roundLineups, noticesPerRound, doubleRestWarning };
 }
 
 function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0) {
