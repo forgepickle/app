@@ -2,9 +2,47 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.9.3 — Best Partners Card         ║
+  ║  Version: 8.9.9 — Lock Court Cards on Delete ║
   ║  Date: 2026-05-29                            ║
   ║  Changes:                                    ║
+  ║  (1) confirmDeleteSession + confirmEndSession:║
+  ║      pointer-events:none on #sessionViewBody ║
+  ║      during GAS call — blocks Log/View Match ║
+  ║      and pencil without touching dynamically ║
+  ║      rendered card HTML. Restored in finally.║
+  ║      EXIT button left active (closeSessionView║
+  ║      is idempotent; GAS call still completes).║
+  ║                                              ║
+  ║  v8.9.8 — Pessimistic Session Close          ║
+  ║  (1) confirmDeleteSession + confirmEndSession:║
+  ║      switched from optimistic to pessimistic ║
+  ║      close. Overlay stays open during GAS    ║
+  ║      call. On success: "Deleting/Ending..."  ║
+  ║      toast shows on visible overlay, success ║
+  ║      toast replaces it, 300ms pause, then    ║
+  ║      overlay fades. Eliminates all optimistic║
+  ║      close race conditions and rollback logic.║
+  ║                                              ║
+  ║  v8.9.5 — Sync Race Fix                      ║
+  ║  (1) _doSessionSyncRefresh: add post-await   ║
+  ║      overlay guard after callBackend returns.║
+  ║      Fixes race where in-flight getSession   ║
+  ║      overwrote activeSession=null after      ║
+  ║      confirmDelete/End had already cleared   ║
+  ║      it, causing button to revert to ACTIVE  ║
+  ║      SESSION until _spikeSync corrected it.  ║
+  ║                                              ║
+  ║  v8.9.4 — Pending Toast on Delete/End        ║
+  ║  (1) confirmDeleteSession + confirmEndSession:║
+  ║      show "Deleting/Ending session..." info  ║
+  ║      toast immediately after optimistic close║
+  ║      (300ms delay past overlay fade). Fixes  ║
+  ║      silent hang appearance on mobile where  ║
+  ║      cursor:wait is invisible during GAS     ║
+  ║      round trip. Success/error toast replaces║
+  ║      it via toastTimer clearTimeout guard.   ║
+  ║                                              ║
+  ║  v8.9.3 — Best Partners Card                 ║
   ║  (1) Analytics Individual: new Best Partners ║
   ║      metric card (M4). Shows top 3 synergy   ║
   ║      partners for selected player. Reuses    ║
@@ -6628,6 +6666,11 @@ async function _doSessionSyncRefresh(showOverlay) {
   try {
     const res = await callBackend(getPayload('getSession'));
 
+    // Re-check overlay after async gap — if delete/end fired while getSession was in-flight,
+    // the overlay is already closed and activeSession already nulled by confirmDeleteSession /
+    // confirmEndSession. Bail out here to avoid overwriting that cleared state.
+    if (!svOverlay.classList.contains('show')) { _stopSessionSync(); return; }
+
     // Session was deleted or ended by another player while this player was away.
     if (!res.ok || !res.session) {
       _stopSessionSync();
@@ -11286,8 +11329,8 @@ function closeDeleteSessionModal() {
 }
 
 async function confirmDeleteSession() {
-  // Show spinner and lock footer buttons immediately — interactionLock (z-index 600)
-  // cannot block the session view overlay (z-index 700), so we disable buttons directly.
+  // Disable all session view footer buttons directly — interactionLock (z-index 600)
+  // cannot reach the session view overlay (z-index 700), so we lock buttons individually.
   const deleteBtn = document.getElementById('svDeleteBtn');
   const swapBtn   = document.getElementById('svSwapBtn');
   const endBtn    = document.getElementById('svEndBtn');
@@ -11303,22 +11346,26 @@ async function confirmDeleteSession() {
     renderShuffleEntryButton();
     return;
   }
-  // Optimistic close — update UI immediately so button resets without waiting for GAS.
-  // Save prevSession for rollback if the backend call fails.
-  const prevSession = activeSession;
-  activeSession = null;
-  closeSessionView();
-  renderShuffleEntryButton();
+  // Pessimistic close — keep overlay open during GAS call so the toast fires on a
+  // visible overlay, not after it has faded. Overlay closes only on confirmed success.
+  // Lock court card buttons (Log/View Match) via pointer-events — survives sync re-renders
+  // because _renderSessionViewCards only writes to #sessionViewCourtCards.innerHTML,
+  // not the parent #sessionViewBody style. EXIT button intentionally left active:
+  // if tapped, closeSessionView() is idempotent and the GAS call still completes.
+  const svBody = document.getElementById('sessionViewBody');
+  if (svBody) svBody.style.pointerEvents = 'none';
+  showToast('Deleting session…', 'info');
   lockUI();
   try {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'Delete failed');
     showToast('Session deleted');
+    await new Promise(r => setTimeout(r, 300)); // let success toast paint before overlay fades
+    activeSession = null;
+    closeSessionView();
+    renderShuffleEntryButton();
     _spikeSync(30000); // Adaptive polling: spike so other clients see session cleared fast
   } catch(e) {
-    // Rollback: restore session state and reset button back to Active Session
-    activeSession = prevSession;
-    renderShuffleEntryButton();
     if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.classList.remove('loading'); }
     if (swapBtn)   swapBtn.disabled = false;
     if (endBtn)    endBtn.disabled  = false;
@@ -11326,6 +11373,7 @@ async function confirmDeleteSession() {
     showError('Could not delete session: ' + e.message);
   } finally {
     unlockUI();
+    if (svBody) svBody.style.pointerEvents = '';
   }
 }
 
@@ -11364,28 +11412,33 @@ async function confirmEndSession() {
     showToast('Session ended ✓');
     return;
   }
-  // Optimistic close — update UI immediately so button resets without waiting for GAS.
-  // Save prevSession for rollback if the backend call fails.
-  const prevSession = activeSession;
-  activeSession = null;
-  closeSessionView();
-  renderShuffleEntryButton();
+  // Pessimistic close — keep overlay open during GAS call so the toast fires on a
+  // visible overlay, not after it has faded. Overlay closes only on confirmed success.
+  // Lock court card buttons (Log/View Match) via pointer-events — survives sync re-renders
+  // because _renderSessionViewCards only writes to #sessionViewCourtCards.innerHTML,
+  // not the parent #sessionViewBody style. EXIT button intentionally left active:
+  // if tapped, closeSessionView() is idempotent and the GAS call still completes.
+  const svBody = document.getElementById('sessionViewBody');
+  if (svBody) svBody.style.pointerEvents = 'none';
+  showToast('Ending session…', 'info');
   lockUI();
   try {
     const res = await callBackend(getPayload('deleteSession', { requestId: makeRequestId() }));
     if (!res.ok) throw new Error(res.error || 'End failed');
     showToast('Session ended ✓');
+    await new Promise(r => setTimeout(r, 300)); // let success toast paint before overlay fades
+    activeSession = null;
+    closeSessionView();
+    renderShuffleEntryButton();
     _spikeSync(30000); // Adaptive polling: spike so other clients see session ended fast
   } catch(e) {
-    // Rollback: restore session state and reset button back to Active Session
-    activeSession = prevSession;
-    renderShuffleEntryButton();
     if (endBtn)   { endBtn.disabled = false; endBtn.classList.remove('loading'); }
     if (shareBtn)   shareBtn.disabled = false;
     if (swapBtn)    swapBtn.disabled  = false;
     showError('Could not end session: ' + e.message);
   } finally {
     unlockUI();
+    if (svBody) svBody.style.pointerEvents = '';
   }
 }
 
