@@ -2,9 +2,22 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.9.2 — Per-Round Rotation Notice  ║
-  ║  Date: 2026-05-26                            ║
+  ║  Version: 8.9.3 — Best Partners Card         ║
+  ║  Date: 2026-05-29                            ║
   ║  Changes:                                    ║
+  ║  (1) Analytics Individual: new Best Partners ║
+  ║      metric card (M4). Shows top 3 synergy   ║
+  ║      partners for selected player. Reuses    ║
+  ║      pairs[] read-only — zero new compute.   ║
+  ║      Displays partnership win rate (incl     ║
+  ║      ties) + synergy score per partner.      ║
+  ║      Single combined tooltip. Low sample     ║
+  ║      warning at <4 matches. Min 2 matches    ║
+  ║      to qualify. viewMatchesBtn/alphaEntryBtn║
+  ║      insertion anchor updated to sit below   ║
+  ║      Best Partners card.                     ║
+  ║                                              ║
+  ║  v8.9.2 — Per-Round Rotation Notice          ║
   ║  (1) Bug fix: "Best rotation found" notice   ║
   ║      now tracks per-round instead of a       ║
   ║      global flag. Notice shows only for      ║
@@ -1558,6 +1571,14 @@ body {
   letter-spacing: 0.5px; text-transform: uppercase;
 }
 
+/* Best Partners rows */
+.bp-row { padding: 12px 0; }
+.bp-row + .bp-row { border-top: 1px solid var(--grey-light); }
+.bp-row:first-child { padding-top: 0; }
+.bp-row-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.bp-rank { font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 900; font-size: 18px; color: var(--grey-mid); min-width: 16px; }
+.bp-name { font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 16px; text-transform: uppercase; color: var(--black); flex: 1; min-width: 0; }
+
 /* Dominance score */
 .dominance-row { display: flex; align-items: baseline; gap: 8px; }
 .dominance-score {
@@ -2703,7 +2724,7 @@ body {
 .view-matches-btn {
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px;
-  margin: 4px clamp(12px, 4vw, 20px) 10px;
+  margin: 12px clamp(12px, 4vw, 20px) 10px;
   padding: 13px 16px;
   background: var(--white);
   border: 1.5px solid var(--grey-light);
@@ -3337,7 +3358,7 @@ body {
   border: 1.5px solid var(--alpha-gold);
   background: transparent;
   cursor: pointer;
-  margin: 4px clamp(12px, 4vw, 20px) 10px;
+  margin: 12px clamp(12px, 4vw, 20px) 10px;
   transition: all 0.15s;
   box-sizing: border-box;
 }
@@ -4565,6 +4586,19 @@ body {
           </button>
         </div>
         <div id="clutchContent"></div>
+      </div>
+
+      <!-- M4: Best Partners -->
+      <div class="metric-card" id="bestPartnersCard">
+        <div class="metric-header">
+          <span class="metric-title">Best Partners</span>
+          <button class="tooltip-btn" onclick="showTooltipKey('bestPartners')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </button>
+        </div>
+        <div id="bestPartnersContent"></div>
       </div>
       </div><!-- /individualMetricCards -->
 
@@ -7654,6 +7688,7 @@ function renderIndividualMetrics(id) {
   if (!player) return;
   renderRatingTrend(player);
   renderFormIndex(player);
+  renderBestPartners(player);
   renderClutchRating(player);
 }
 
@@ -7760,8 +7795,56 @@ function renderClutchRating(p) {
   btn.innerHTML = `<svg class="vmb-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg><span class="view-matches-btn-text">View ${escHtml(p.name)}'s Matches</span>`;
   btn.onclick = () => goToFilteredMatches('player', p.id);
   const clutchCard = document.getElementById('clutchContent').closest('.metric-card');
-  if (clutchCard && clutchCard.parentNode) clutchCard.parentNode.insertBefore(btn, clutchCard.nextSibling);
+  const bpCard = document.getElementById('bestPartnersCard');
+  const insertAfter = bpCard || clutchCard;
+  if (insertAfter && insertAfter.parentNode) insertAfter.parentNode.insertBefore(btn, insertAfter.nextSibling);
   renderAlphaEntryButton(p); // Alpha entry button below View Matches
+}
+
+function renderBestPartners(player) {
+  const wrap = document.getElementById('bestPartnersContent');
+  if (!wrap) return;
+  const playerPairs = pairs.filter(pr => {
+    const total = pr.wins + pr.losses + pr.ties;
+    return total >= 2 && (pr.p1 === player.id || pr.p2 === player.id);
+  }).map(pr => {
+    const total    = pr.wins + pr.losses + pr.ties;
+    const winPct   = Math.round((pr.wins / total) * 100);
+    const partnerId = pr.p1 === player.id ? pr.p2 : pr.p1;
+    const partner  = players.find(p => p.id === partnerId);
+    return { ...pr, total, winPct, partner };
+  }).filter(item => item.partner)
+    .sort((a, b) => b.synergy - a.synergy)
+    .slice(0, 3);
+
+  if (playerPairs.length === 0) {
+    wrap.innerHTML = '<div class="clutch-no-data">🤝 Play 2+ matches with a partner to unlock</div>';
+    return;
+  }
+
+  wrap.innerHTML = playerPairs.map((item, idx) => {
+    const lowSample = item.total < 4;
+    const tiesHtml  = item.ties > 0 ? `<div class="wl-pill t">${item.ties}T</div>` : '';
+    const syn       = item.synergy;
+    const synClass  = syn >= 0.20 ? 'pos' : syn <= -0.20 ? 'neg' : 'neu';
+    const synLabel  = syn >= 0.20 ? '⚡ Strong Chemistry' : syn <= -0.20 ? '⚠ Mismatch' : '〰 Neutral';
+    const synSign   = syn >= 0 ? '+' : '';
+    return `<div class="bp-row">
+      <div class="bp-row-header">
+        <div class="bp-rank">${idx + 1}</div>
+        <div class="bp-name">${escHtml(item.partner.name)}${lowSample ? ' <span class="low-sample-tag">⚠ Low sample</span>' : ''}</div>
+      </div>
+      <div class="pair-metric" style="margin-top:0;">
+        <div class="pair-metric-label">Partnership Win Rate</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${item.winPct}%"></div></div>
+        <div class="progress-meta"><div class="wl-pills"><div class="wl-pill w">${item.wins}W</div><div class="wl-pill l">${item.losses}L</div>${tiesHtml}</div><span>${item.winPct}%</span></div>
+      </div>
+      <div class="pair-metric">
+        <div class="pair-metric-label">Synergy Score</div>
+        <div class="synergy-row"><div class="synergy-score ${synClass}">${synSign}${syn.toFixed(2)}</div><div class="synergy-label">${synLabel}</div></div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderPairCards() {
@@ -10075,6 +10158,7 @@ const TOOLTIPS = {
   duprTrend:      { title: 'DUPR Rating Trend',    body: 'Your DUPR rating after each match, on a scale of 2.0-8.0. Shows your last 10 matches.\n\n📈 Best: Steep upward curve — improving fast.\n📉 Worst: Downward slide — time to regroup.\n\nMost club players sit between 3.0 and 4.5.' },
   formIndex:      { title: 'Form Index',            body: 'Rolling score from your last 5 matches, weighted by opponent strength and point margin.\n\n🔥 On Fire: Dominant run — keep it up!\n🟢 Hot: Strong recent form.\n🟡 Warm: Mixed — could go either way.\n🔴 Cold: Rough patch. Time to heat up.' },
   clutchRating:   { title: 'Clutch Rating',         body: "All-time win rate when your team's combined rating was lower than your opponents' going in.\n\n📈 Best: 100% — you thrive under pressure!\n📉 Worst: 0% — tough when outgunned.\n\nNo data = you haven't been the underdog yet." },
+  bestPartners:   { title: 'Best Partners',          body: 'Your top 3 partners by synergy score. Win rate = wins out of total matches including ties. Synergy = how much better you perform together compared to what your individual ratings predict.\n\n⚡ Strong Chemistry: above +0.20\n〰 Neutral: playing to ratings\n⚠ Mismatch: below −0.20\n\nMin 2 matches to qualify. ⚠ Low sample = fewer than 4 matches together, treat with caution.' },
   pairWinRate:    { title: 'Partnership Win Rate',  body: 'Win % for this pair (min 2 games to qualify).\n\n📈 Best: 100% — unbeaten as a duo!\n📉 Worst: 0% — yet to find their groove.\n\n⚠ = fewer than 4 games, treat with caution.' },
   synergyScore:   { title: 'Synergy Score',         body: 'How much better (or worse) this pair performs compared to what their individual ratings would predict. Positive = they make each other better. Negative = they underperform together.\n\n⚡ Best: above +0.20 — real chemistry!\n⚠ Worst: below −0.20 — underperforming together.\n〰 Neutral: playing to their ratings.' },
   dominanceScore:   { title: 'Dominance Score',       body: 'Avg point margin per game together. Positive = winning by that margin on average.\n\n📈 Best: large positive (e.g. +6) — dominant!\n📉 Worst: large negative — tough together.\nNear zero = closely contested games.' },
