@@ -2,14 +2,21 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 8.9.9 — Lock Court Cards on Delete ║
-  ║  Date: 2026-05-29                            ║
-  ║  Changes:                                    ║
-  ║  (1) confirmDeleteSession + confirmEndSession:║
-  ║      pointer-events:none on #sessionViewBody ║
-  ║      during GAS call — blocks Log/View Match ║
-  ║      and pencil without touching dynamically ║
-  ║      rendered card HTML. Restored in finally.║
+  ║  Version: 9.0.0 — Session CTA + Add Player UX ║
+  ║  Date: 2026-06-02                             ║
+  ║  Changes:                                     ║
+  ║  (1) Add Player moved to header icon; form    ║
+  ║      converted to modal-sheet (backdrop,      ║
+  ║      slide-up, background lock, Android KB    ║
+  ║      fix). Backdrop + Cancel dismiss modal.   ║
+  ║  (2) Plan Session CTA replaces Add Player     ║
+  ║      bottom bar on Players screen (no session)║
+  ║  (3) Active Session CTA global across all     ║
+  ║      screens except Add Match wizard.         ║
+  ║  (4) Leaderboard pulsing dot removed.         ║
+  ║  (5) _sessionViewLoading flag: spinner        ║
+  ║      persists across nav tabs mid-load,       ║
+  ║      double-tap blocked, clears on logout.    ║
   ║      EXIT button left active (closeSessionView║
   ║      is idempotent; GAS call still completes).║
   ║                                              ║
@@ -564,18 +571,6 @@ body {
   position: relative;
 }
 /* Active session pulsing dot on Leaderboard nav icon */
-.nav-session-dot {
-  position: absolute;
-  top: -2px; right: -3px;
-  width: 8px; height: 8px;
-  background: var(--accent);
-  border-radius: 50%;
-  animation: sessionDotPulse 1.6s ease-in-out infinite;
-}
-@keyframes sessionDotPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.7); }
-}
 .nav-label {
   font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-weight: 700;
@@ -631,6 +626,20 @@ body {
   padding: 3px 10px;
   border-radius: 20px;
 }
+.header-add-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1.5px solid var(--grey-light);
+  background: var(--white);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--grey-dark);
+  flex-shrink: 0;
+}
+.header-add-btn:active { background: var(--accent-bg); }
 
 /* ════════════════════════════════════════════
    SHARED: SCREEN WRAPPER
@@ -642,7 +651,8 @@ body {
   z-index: 1;
   padding-top: calc(var(--topbar-h) + var(--header-h));
   /* iOS: add safe-area-inset-bottom so content is not hidden behind the nav bar */
-  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 8px);
+  /* --addbar-h reserves space for shuffleEntryArea CTA on all screens */
+  padding-bottom: calc(var(--nav-h) + var(--addbar-h) + env(safe-area-inset-bottom, 0px) + 8px);
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
@@ -651,10 +661,9 @@ body {
 }
 .screen.active { display: block; }
 
-/* Players screen needs extra bottom padding for the fixed add-player-area */
-#screenPlayers {
-  /* iOS: add safe-area-inset-bottom for full scroll reach */
-  padding-bottom: calc(var(--nav-h) + var(--addbar-h) + env(safe-area-inset-bottom, 0px) + 12px);
+/* Add Match: sticky .step-nav sits at bottom:0 — pad exactly to nav bar top, no extra gap */
+#screenAddMatch {
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
 }
 
 /* ════════════════════════════════════════════
@@ -1184,21 +1193,6 @@ body {
 }
 .empty-sub { font-size: 13px; color: var(--grey-mid); line-height: 1.5; }
 
-/* Add player sticky area */
-.add-player-area {
-  position: absolute;
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
-  left: 0;
-  right: 0;
-  padding: 10px 16px;
-  background: rgba(247,247,245,0.97);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  border-top: 1px solid var(--grey-light);
-  z-index: 350;
-  display: none;
-}
-.add-player-area.visible { display: block; }
 
 .add-btn {
   width: 100%;
@@ -1217,12 +1211,11 @@ body {
 .add-btn:hover { background: var(--accent-dim); }
 .add-btn:active { transform: scale(0.98); }
 
-.add-form { display: none; flex-direction: column; gap: 8px; }
-.add-form.open { display: flex; }
 .add-form-label {
   font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-weight: 700; font-size: 11px;
   letter-spacing: 2px; text-transform: uppercase; color: var(--grey-mid);
+  margin-bottom: 6px;
 }
 .add-input {
   width: 100%;
@@ -1242,7 +1235,7 @@ body {
 .add-char-count { font-size: 11px; color: var(--grey-mid); }
 .add-char-count.warn { color: var(--error); }
 
-.add-form-btns { display: flex; gap: 8px; }
+.add-form-btns { display: flex; gap: 8px; margin-top: 16px; }
 .add-confirm-btn, .add-cancel-btn {
   flex: 1; padding: 13px;
   border-radius: 12px;
@@ -1943,7 +1936,7 @@ body {
 .step-nav {
   display: flex;
   gap: 10px;
-  padding: 14px clamp(12px, 4vw, 20px);
+  padding: 10px 16px;
   position: sticky;
   bottom: 0;
   background: rgba(247,247,245,0.97);
@@ -1976,12 +1969,11 @@ body {
   font-weight: 700; font-size: clamp(16px, 4.5vw, 19px);
   letter-spacing: 1.5px; text-transform: uppercase;
   color: var(--black); cursor: pointer;
-  transition: all 0.15s;
-  box-shadow: 0 4px 14px rgba(170,220,50,0.3);
+  transition: background 0.15s, color 0.15s;
   display: flex; align-items: center; justify-content: center; gap: 8px;
 }
 .step-next-btn:hover { background: var(--accent-dim); }
-.step-next-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.step-next-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Post-submit success screen */
 .submit-success {
@@ -3463,10 +3455,6 @@ body {
    FORGE SHUFFLE
 ════════════════════════════════════════════ */
 
-/* Leaderboard extra padding for shuffle entry button */
-#screenLeaderboard {
-  padding-bottom: calc(var(--nav-h) + var(--addbar-h) + env(safe-area-inset-bottom, 0px) + 12px);
-}
 
 /* ── Shuffle Entry Button Area ── */
 .shuffle-entry-area {
@@ -4468,6 +4456,9 @@ body {
     <div class="header-title" id="headerTitle">Players</div>
     <div class="header-right">
       <div class="header-badge" id="headerBadge">8 Active</div>
+      <button class="header-add-btn" id="headerAddBtn" onclick="openAddForm()" aria-label="Add player" title="Add player">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
     </div>
   </div>
 
@@ -4488,7 +4479,7 @@ body {
     <div class="empty-state" id="emptyState">
       <div class="empty-icon">🏓</div>
       <div class="empty-title">No Players Yet</div>
-      <div class="empty-sub">Add your first player using the button below.</div>
+      <div class="empty-sub">Add your first player using the + button in the top right.</div>
     </div>
 
     <!-- Inactive section -->
@@ -4504,41 +4495,6 @@ body {
     </div>
 
   </div><!-- /screenPlayers -->
-
-  <!-- Add Player sticky area (only shown on Players screen) -->
-  <div class="add-player-area" id="addPlayerArea">
-    <button class="add-btn" id="addBtn" onclick="openAddForm()">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-      </svg>
-      Add Player
-    </button>
-    <div class="add-form" id="addForm">
-      <div class="add-form-label">New Player Name</div>
-      <input class="add-input" id="addInput" type="text" placeholder="e.g. Alex"
-        maxlength="10" autocomplete="off" autocorrect="off" spellcheck="false">
-      <div class="add-input-meta">
-        <span class="add-validation" id="addValidation"></span>
-        <span class="add-char-count" id="addCharCount">0 / 10</span>
-      </div>
-      <div class="add-rating-row">
-        <div class="add-rating-label-wrap">
-          <div class="add-rating-label">Starting Rating</div>
-          <div class="add-rating-hint">Default: 3.50 · Edit to override</div>
-        </div>
-        <input class="add-rating-input" id="addRatingInput" type="number"
-          min="2.0" max="8.0" step="0.01" value="3.50"
-          autocomplete="off">
-      </div>
-      <div class="add-form-btns">
-        <button class="add-cancel-btn" onclick="closeAddForm()">Cancel</button>
-        <button class="add-confirm-btn" id="addConfirmBtn" onclick="confirmAddPlayer()">
-          <span class="btn-text">Add Player</span>
-          <div class="btn-spinner"></div>
-        </button>
-      </div>
-    </div>
-  </div>
 
   <!-- ══ SCREEN 2: ANALYTICS ══ -->
   <div class="screen" id="screenAnalytics">
@@ -5194,11 +5150,11 @@ body {
 
   </div><!-- /screenLeaderboard -->
 
-  <!-- Shuffle entry button — always visible at bottom of Leaderboard screen -->
+  <!-- Session CTA — shown on Players (no session) or all screens (active session) -->
   <div class="shuffle-entry-area" id="shuffleEntryArea">
     <button class="shuffle-entry-btn" id="shuffleEntryBtn" type="button" onclick="shuffleEntryTap()">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="flex-shrink:0;"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
-      PLAN THE COURTS
+      PLAN SESSION
     </button>
   </div>
 
@@ -5370,6 +5326,44 @@ body {
 </nav>
 
 <!-- ══ MODALS ══ -->
+
+<!-- Add Player Modal -->
+<div class="modal-overlay" id="addPlayerModal" onclick="if(event.target===this) closeAddForm()">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div id="addPlayerModalContent">
+      <div class="modal-title">Add Player</div>
+      <div class="add-form-label">New Player Name</div>
+      <input class="add-input" id="addInput" type="text" placeholder="e.g. Alex"
+        maxlength="10" autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="add-input-meta">
+        <span class="add-validation" id="addValidation"></span>
+        <span class="add-char-count" id="addCharCount">0 / 10</span>
+      </div>
+      <div class="add-rating-row">
+        <div class="add-rating-label-wrap">
+          <div class="add-rating-label">Starting Rating</div>
+          <div class="add-rating-hint">Default: 3.50 · Edit to override</div>
+        </div>
+        <input class="add-rating-input" id="addRatingInput" type="number"
+          min="2.0" max="8.0" step="0.01" value="3.50"
+          autocomplete="off">
+      </div>
+      <div class="add-form-btns">
+        <button class="add-cancel-btn" onclick="closeAddForm()">Cancel</button>
+        <button class="add-confirm-btn" id="addConfirmBtn" onclick="confirmAddPlayer()">
+          <span class="btn-text">Add Player</span>
+          <div class="btn-spinner"></div>
+        </button>
+      </div>
+    </div>
+    <div class="modal-spinner" id="addPlayerSpinner" style="display:none;">
+      <div class="spinner-ring"></div>
+      <div class="spinner-text">Adding player...</div>
+    </div>
+  </div>
+</div>
+
 <!-- Remove Player Modal -->
 <div class="modal-overlay" id="removeModal">
   <div class="modal-sheet">
@@ -6048,8 +6042,8 @@ function _resetAppUI() {
   document.getElementById('appShell').style.display    = 'none';
   document.getElementById('navBar').classList.remove('visible');
   document.getElementById('appHeader').classList.remove('visible');
-  document.getElementById('addPlayerArea').classList.remove('visible');
   document.getElementById('shuffleEntryArea').classList.remove('visible'); // Bug 2: prevents stale .visible persisting across logout/reset
+  _sessionViewLoading = false; // clear any in-flight session load on logout
 
   // Hide demo banner and remove demo offsets
   document.getElementById('demoBanner').classList.remove('show');
@@ -6076,7 +6070,7 @@ function _resetAppUI() {
   document.getElementById('ballDeco2').style.display = 'none';
 
   // Close any open modals
-  ['removeModal','deleteMatchModal','reinstateModal','tooltipModal','leaveMatchModal','debriefModal','deleteSessionModal','endSessionModal','startOverModal','adminPwModal','adminPanelModal'].forEach(id => {
+  ['addPlayerModal','removeModal','deleteMatchModal','reinstateModal','tooltipModal','leaveMatchModal','debriefModal','deleteSessionModal','endSessionModal','startOverModal','adminPwModal','adminPanelModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.remove('show');
   });
@@ -6132,7 +6126,6 @@ function enterDemoMode() {
   document.getElementById('appShell').style.display    = 'block';
   document.getElementById('navBar').classList.add('visible');
   document.getElementById('appHeader').classList.add('visible');
-  document.getElementById('addPlayerArea').classList.add('visible');
   document.getElementById('headerTitle').textContent   = 'Players';
   document.getElementById('headerBadge').style.display = 'block';
 
@@ -6275,7 +6268,6 @@ async function _runSplashThenLaunch(phase1Min) {
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('navBar').classList.add('visible');
   document.getElementById('appHeader').classList.add('visible');
-  document.getElementById('addPlayerArea').classList.add('visible');
   document.getElementById('headerTitle').textContent = 'Players';
   document.getElementById('headerBadge').style.display = 'block';
 
@@ -6374,7 +6366,6 @@ async function launchApp() {
   document.getElementById('appShell').style.display = 'block';
   document.getElementById('navBar').classList.add('visible');
   document.getElementById('appHeader').classList.add('visible');
-  document.getElementById('addPlayerArea').classList.add('visible');
   document.getElementById('headerTitle').textContent = 'Players';
   document.getElementById('headerBadge').style.display = 'block';
 
@@ -7117,8 +7108,9 @@ function _doNavigateTo(screen) {
 
   document.getElementById('headerTitle').textContent = screenMap[screen].title;
   document.getElementById('headerBadge').style.display = screenMap[screen].badge ? 'block' : 'none';
-  document.getElementById('addPlayerArea').classList.toggle('visible', screen === 'players');
-  document.getElementById('shuffleEntryArea').classList.toggle('visible', screen === 'leaderboard');
+  const headerAddBtn = document.getElementById('headerAddBtn');
+  if (headerAddBtn) headerAddBtn.style.display = (screen === 'players') ? 'flex' : 'none';
+  renderShuffleEntryButton();
 
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('nav-' + (screen === 'add' ? 'add' : screen)).classList.add('active');
@@ -7485,26 +7477,60 @@ function attachAddInputListeners() {
   newInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmAddPlayer(); });
 }
 
+let _addModalVVListener = null;
+
 function openAddForm() {
   // Pre-warm GAS — fires while user types the player name.
   // Guard: callBackendGet throws synchronously in demo mode, so skip it entirely.
   if (!isDemoMode) callBackendGet('getVersion').catch(function() {});
-  document.getElementById('addBtn').style.display = 'none';
-  document.getElementById('addForm').classList.add('open');
+
+  // Reset form state
   const input = document.getElementById('addInput');
   input.value = '';
+  input.classList.remove('invalid');
   document.getElementById('addValidation').textContent = '';
   document.getElementById('addCharCount').textContent = '0 / 10';
-  input.classList.remove('invalid');
   document.getElementById('addConfirmBtn').disabled = false;
   const ri = document.getElementById('addRatingInput');
   if (ri) ri.value = STARTING_RATING.toFixed(2);
-  input.focus();
+
+  // Show modal
+  document.getElementById('addPlayerModal').classList.add('show');
+
+  // Android keyboard fix — same pattern as editPlayerModal.
+  // visualViewport.resize fires when the software keyboard opens; we translate
+  // the sheet upward by the keyboard height so the input stays visible.
+  // On iOS, vv.offsetTop compensates automatically so the net shift is ~0.
+  if (window.visualViewport) {
+    _addModalVVListener = function() {
+      requestAnimationFrame(function() {
+        const kbH = Math.max(0,
+          window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+        const sheet = document.querySelector('#addPlayerModal .modal-sheet');
+        if (sheet) sheet.style.transform = kbH > 0 ? 'translateY(-' + kbH + 'px)' : '';
+      });
+    };
+    window.visualViewport.addEventListener('resize', _addModalVVListener);
+  }
+
+  // Defer focus so the slide-up animation completes first
+  setTimeout(function() { input.focus({ preventScroll: true }); }, 320);
+}
+
+function _teardownAddModalVV() {
+  const sheet = document.querySelector('#addPlayerModal .modal-sheet');
+  if (sheet) sheet.style.transform = '';
+  if (window.visualViewport && _addModalVVListener) {
+    window.visualViewport.removeEventListener('resize', _addModalVVListener);
+    _addModalVVListener = null;
+  }
 }
 
 function closeAddForm() {
-  document.getElementById('addBtn').style.display = 'flex';
-  document.getElementById('addForm').classList.remove('open');
+  _teardownAddModalVV();
+  document.getElementById('addPlayerModal').classList.remove('show');
+  const headerAddBtn = document.getElementById('headerAddBtn');
+  if (headerAddBtn) headerAddBtn.style.display = 'flex';
 }
 
 async function confirmAddPlayer() {
@@ -10357,33 +10383,37 @@ function renderShuffleEntryButton() {
     btn.innerHTML = `<span class="btn-text">${label}</span><div class="shuffle-entry-spinner"></div>`;
     btn.className = 'shuffle-entry-btn session-active';
   } else {
-    btn.innerHTML = shuffleSvg + ' PLAN THE COURTS';
+    btn.innerHTML = shuffleSvg + ' PLAN SESSION';
     btn.className = 'shuffle-entry-btn';
   }
-  // Pulsing dot on Leaderboard nav icon — shown only when active session exists
-  const navIcon = document.querySelector('#nav-leaderboard .nav-icon');
-  if (navIcon) {
-    const existingDot = navIcon.querySelector('.nav-session-dot');
-    if (session && !existingDot) {
-      const dot = document.createElement('span');
-      dot.className = 'nav-session-dot';
-      navIcon.appendChild(dot);
-    } else if (!session && existingDot) {
-      existingDot.remove();
-    }
+
+  // Re-apply loading state if fetch is still in flight (e.g. user navigated mid-load)
+  if (_sessionViewLoading) {
+    btn.disabled = true;
+    btn.classList.add('loading');
+  }
+
+  // Visibility: active session → all screens except Add Match; no session → Players screen only
+  const area = document.getElementById('shuffleEntryArea');
+  if (area) {
+    const showCta = session ? (currentScreen !== 'add') : (currentScreen === 'players');
+    area.classList.toggle('visible', showCta);
   }
 }
+
+let _sessionViewLoading = false;
 
 async function shuffleEntryTap() {
   const session = isDemoMode ? demoSession : activeSession;
   if (session) {
-    // Show spinner on entry button immediately; overlay + skeleton appear on openSessionView
+    if (_sessionViewLoading) return; // already in flight — ignore tap
     if (!isDemoMode) {
+      _sessionViewLoading = true;
       const btn = document.getElementById('shuffleEntryBtn');
       if (btn) { btn.disabled = true; btn.classList.add('loading'); }
     }
     await openSessionView();
-    // Restore button — view is now open (or error was shown)
+    _sessionViewLoading = false;
     const btn = document.getElementById('shuffleEntryBtn');
     if (btn) { btn.disabled = false; btn.classList.remove('loading'); }
   } else {
