@@ -2,9 +2,57 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 9.0.0 — Session CTA + Add Player UX ║
-  ║  Date: 2026-06-02                             ║
+  ║  Version: 9.0.2 — Shuffle Algorithm Upgrade  ║
+  ║  Date: 2026-06-11                             ║
   ║  Changes:                                     ║
+  ║  (1) Bench rescue: after sort/shuffle,        ║
+  ║      any rested player stranded in bench zone ║
+  ║      is swapped with weakest non-rested       ║
+  ║      court-zone player (position courts*4-1). ║
+  ║      Mode-aware: minimally disrupts           ║
+  ║      balanced/tiered rating ordering.         ║
+  ║  (2) Frequency-weighted scoring: allHistoric  ║
+  ║      Pairs Set replaced with pairFrequency    ║
+  ║      Map (pair → use count). Score = Σ(count²)║
+  ║      — heavily penalises over-repeated pairs, ║
+  ║      distributes repeats evenly across long   ║
+  ║      sessions (8–10 players, 10 rounds).      ║
+  ║  (3) Rolling window replaced with single      ║
+  ║      lastRoundPairs Set. Flat +2 additive per ║
+  ║      pair from previous round discourages     ║
+  ║      back-to-back repeats without multi-round ║
+  ║      window complexity.                       ║
+  ║                                              ║
+  ║  v9.0.1 — Multi-User Session Sync Fix        ║
+  ║  (1) _doSessionSyncRefresh: in-flight flag    ║
+  ║      (_sessionSyncInFlight) prevents race     ║
+  ║      between 15s interval and visibilitychange║
+  ║      resume firing simultaneously. Flag check ║
+  ║      placed before overlay show to prevent    ║
+  ║      overlay leak on early return.            ║
+  ║  (2) _doSessionSyncRefresh: retry once (1.5s  ║
+  ║      wait) before closing session view on     ║
+  ║      empty getSession response. Distinguishes ║
+  ║      GAS read-race blip from real deletion.   ║
+  ║      Overlay always shown during retry.       ║
+  ║      View guards after wait + after retry     ║
+  ║      prevent action on closed view.           ║
+  ║  (3) _doSessionSyncRefresh: preserve working  ║
+  ║      lineup during swap mode. Replacing       ║
+  ║      activeSession mid-swap orphaned the      ║
+  ║      _executeSwap reference, losing unsaved   ║
+  ║      drag changes. Only lineup is frozen;     ║
+  ║      all other fields update from server.     ║
+  ║  (4) Refresh button (svRefreshBtn) added to   ║
+  ║      session view tab row (next to pencil).   ║
+  ║      Hidden in swap mode; re-enabled by       ║
+  ║      _resetSessionViewFooter.                 ║
+  ║  (5) _stopSessionSync now clears              ║
+  ║      _sessionSyncInFlight so a re-opened      ║
+  ║      session view is never blocked by a flag  ║
+  ║      left true by a previous session.         ║
+  ║                                              ║
+  ║  v9.0.0 — Session CTA + Add Player UX        ║
   ║  (1) Add Player moved to header icon; form    ║
   ║      converted to modal-sheet (backdrop,      ║
   ║      slide-up, background lock, Android KB    ║
@@ -5041,6 +5089,9 @@ body {
       <div id="sessionViewTabWrap" style="padding:12px 16px 0;flex-shrink:0;">
         <div class="session-tab-pencil-row">
           <div class="toggle-pills" id="sessionViewRoundTabs" style="display:none;"></div>
+          <button class="swap-inline-btn" id="svRefreshBtn" type="button" onclick="_doSessionSyncRefresh(true)" title="Refresh session">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
           <button class="swap-inline-btn" id="svSwapBtn" type="button" onclick="enterSessionViewSwapMode()" title="Swap players">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
           </button>
@@ -5775,6 +5826,7 @@ let syncInterval = null;
 let sessionSyncInterval    = null;  // setInterval ID for 15s session poll
 let _sessionVisibilityHandler = null; // stored visibilitychange listener ref for clean removal
 let _sessionHiddenAt       = null;  // timestamp when page became hidden (for overlay threshold)
+let _sessionSyncInFlight   = false; // prevents concurrent _doSessionSyncRefresh calls (interval + visibilitychange race)
 
 // == Adaptive polling spike state ==
 let syncSpikeTimer        = null;  // setTimeout ID — reverts global sync from 5s back to 15s after a write
@@ -6634,7 +6686,8 @@ function _stopSessionSync() {
     document.removeEventListener('visibilitychange', _sessionVisibilityHandler);
     _sessionVisibilityHandler = null;
   }
-  _sessionHiddenAt = null;
+  _sessionHiddenAt    = null;
+  _sessionSyncInFlight = false; // clear in-flight flag so re-opened session view is never blocked
   const overlay = document.getElementById('sessionSyncOverlay');
   if (overlay) overlay.style.display = 'none';
 }
@@ -6651,29 +6704,61 @@ async function _doSessionSyncRefresh(showOverlay) {
     return;
   }
 
+  // In-flight guard — placed BEFORE the overlay show so the overlay is never leaked
+  // by an early return. _stopSessionSync() also clears this flag so a re-opened
+  // session view is never blocked by a stale true value from a previous session.
+  if (_sessionSyncInFlight) return;
+  _sessionSyncInFlight = true;
+
   const syncOverlay = document.getElementById('sessionSyncOverlay');
   if (showOverlay && syncOverlay) syncOverlay.style.display = 'flex';
 
   try {
     const res = await callBackend(getPayload('getSession'));
 
-    // Re-check overlay after async gap — if delete/end fired while getSession was in-flight,
-    // the overlay is already closed and activeSession already nulled by confirmDeleteSession /
-    // confirmEndSession. Bail out here to avoid overwriting that cleared state.
+    // Re-check after async gap — if delete/end fired while getSession was in-flight,
+    // the overlay is already closed and activeSession already nulled. Bail out.
     if (!svOverlay.classList.contains('show')) { _stopSessionSync(); return; }
 
-    // Session was deleted or ended by another player while this player was away.
-    if (!res.ok || !res.session) {
+    let sessionData = res.session;
+
+    // FIX 2: If first attempt returns empty, retry once before closing the view.
+    // GAS can transiently return { ok:true, session:null } due to concurrent
+    // write buffering or a brief cold-start read race. A single retry distinguishes
+    // a real deletion from a momentary sheet-read blip.
+    if (!sessionData) {
+      // Always show overlay during retry so the user sees feedback before any close.
+      if (syncOverlay) syncOverlay.style.display = 'flex';
+      await new Promise(r => setTimeout(r, 1500));
+      // Guard: view may have been closed (EXIT / Delete / End) during the 1.5s wait.
+      if (!svOverlay.classList.contains('show')) return; // finally cleans up
+      const retry = await callBackend(getPayload('getSession'));
+      // Guard again after the retry network round-trip.
+      if (!svOverlay.classList.contains('show')) return; // finally cleans up
+      sessionData = retry.session;
+    }
+
+    // Both attempts returned empty — session is confirmed gone.
+    if (!sessionData) {
       _stopSessionSync();
       activeSession = null;  // clear before render so button shows "Plan the Courts"
       closeSessionView();
       renderShuffleEntryButton();
-      setTimeout(() => showToast('Session was ended by another player', 'info'), 300); // delay past 250ms overlay fade — prevents iOS compositor from hiding toast behind fading layer
+      setTimeout(() => showToast('Session was ended by another player', 'info'), 300); // delay past 250ms overlay fade
       return;
     }
 
-    // Update local session state with latest backend data.
-    activeSession = res.session;
+    // FIX 3: Update local session state. When the user is mid-swap, preserve their
+    // working lineup — _executeSwap holds a reference into activeSession.lineup and
+    // replacing the whole object would orphan their unsaved drag changes. Only the
+    // lineup key is preserved; all other fields (logged, playerIds, etc.) update normally.
+    if (shuffle.swapMode && activeSession) {
+      const workingLineup = activeSession.lineup;
+      activeSession = sessionData;
+      activeSession.lineup = workingLineup;
+    } else {
+      activeSession = sessionData;
+    }
 
     // Re-render guards — skip DOM update if player is in a disruptive interaction:
     //   swap mode: UI is rendered inside session-view-body; re-render would wipe it
@@ -6692,9 +6777,10 @@ async function _doSessionSyncRefresh(showOverlay) {
       _showSessionView(activeSession, true);
     }
   } catch(e) {
-    // Non-fatal — silently absorb network errors; user can still interact.
+    // Non-fatal — silently absorb network errors (including retry throws); user can still interact.
     console.warn('[Forge] Session sync failed:', e.message);
   } finally {
+    _sessionSyncInFlight = false;
     if (syncOverlay) syncOverlay.style.display = 'none';
   }
 }
@@ -11303,12 +11389,14 @@ function sessionViewOverlayTap(e) {
 function _resetSessionViewFooter() {
   document.getElementById('svFooterNormal').style.display = 'flex';
   document.getElementById('svFooterSwap').style.display    = 'none';
-  // Restore edit icon visibility (hidden while swap mode is active)
-  const svSwapBtn = document.getElementById('svSwapBtn');
-  if (svSwapBtn) svSwapBtn.style.display = '';
+  // Restore tab-row icon button visibility (hidden while swap mode is active)
+  const svSwapBtn    = document.getElementById('svSwapBtn');
+  const svRefreshBtn = document.getElementById('svRefreshBtn');
+  if (svSwapBtn)    svSwapBtn.style.display    = '';
+  if (svRefreshBtn) svRefreshBtn.style.display = '';
   // Reset loading state on all footer buttons — covers success path and demo mode early-return.
   // svShareBtn is included so it is always re-enabled on next session open after a Delete/End success.
-  ['svDeleteBtn', 'svSwapBtn', 'svEndBtn', 'svSwapDoneBtn', 'svShareBtn'].forEach(id => {
+  ['svDeleteBtn', 'svSwapBtn', 'svEndBtn', 'svSwapDoneBtn', 'svShareBtn', 'svRefreshBtn'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) { btn.disabled = false; btn.classList.remove('loading'); }
   });
@@ -11551,9 +11639,11 @@ function enterSessionViewSwapMode() {
   if (round) _renderBenchSection(session.playerIds, round, 'sessionViewBenchSection', 'sessionViewCourtCards');
   document.getElementById('svFooterNormal').style.display   = 'none';
   document.getElementById('svFooterSwap').style.display     = 'block';
-  // Hide edit icon while swap mode is active
-  const svSwapBtn = document.getElementById('svSwapBtn');
-  if (svSwapBtn) svSwapBtn.style.display = 'none';
+  // Hide tab-row icon buttons while swap mode is active
+  const svSwapBtn    = document.getElementById('svSwapBtn');
+  const svRefreshBtn = document.getElementById('svRefreshBtn');
+  if (svSwapBtn)    svSwapBtn.style.display    = 'none';
+  if (svRefreshBtn) svRefreshBtn.style.display = 'none';
 }
 
 async function exitSessionViewSwapMode() {
@@ -11602,10 +11692,10 @@ async function fetchActiveSession() {
 // ── Shuffle Algorithm ──────────────────────────────────────────────
 
 function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
-  // allHistoricPairs: every partner + opponent pair ever used (global, soft penalty)
-  const allHistoricPairs = new Set();
-  // recentWindow: rolling array of Sets, one per round, capped at 2 entries (hard penalty)
-  const recentWindow = [];
+  // pairFrequency: Map of pair-key → use count across all rounds (used for Σcount² scoring)
+  const pairFrequency = new Map();
+  // lastRoundPairs: Set of pair-keys from the immediately previous round (recency nudge)
+  let lastRoundPairs = new Set();
   const roundLineups = [];
   let restedPlayers  = [];
   const noticesPerRound = [];
@@ -11613,13 +11703,9 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
   const restCounts = {}; // playerId → total rounds sat out across all rounds so far
 
   for (let r = 0; r < rounds; r++) {
-    // recentPairs = union of last 2 rounds' pair sets
-    const recentPairs = new Set();
-    recentWindow.forEach(s => s.forEach(k => recentPairs.add(k)));
-
     const result = r === 0
       ? { lineup: _generateRound(selectedPlayers, courts, mode, restedPlayers, r), notice: null }
-      : _generateRoundWithRotation(selectedPlayers, courts, mode, allHistoricPairs, recentPairs, restedPlayers, r);
+      : _generateRoundWithRotation(selectedPlayers, courts, mode, pairFrequency, lastRoundPairs, restedPlayers, r);
 
     noticesPerRound.push(result.notice || null);
 
@@ -11647,15 +11733,12 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
       }
     }
 
-    // Build this round's pair set (partner pairs + opponent cross-pairs)
+    // Build this round's pair set and accumulate frequency counts
     const roundPairs = _buildRoundPairs(result.lineup);
+    roundPairs.forEach(k => pairFrequency.set(k, (pairFrequency.get(k) || 0) + 1));
 
-    // Accumulate into global historic set
-    roundPairs.forEach(k => allHistoricPairs.add(k));
-
-    // Slide the window — keep only last 2 rounds
-    recentWindow.push(roundPairs);
-    if (recentWindow.length > 2) recentWindow.shift();
+    // Advance recency tracker — only the immediately previous round is tracked
+    lastRoundPairs = roundPairs;
 
     roundLineups.push(result.lineup);
     restedPlayers = newRested;
@@ -11665,7 +11748,7 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
 }
 
 function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0) {
-  // Move rested players to front of pool
+  // Move rested players to front of pool before sort/shuffle
   const rested = playerPool.filter(p => restedPlayers.some(r => r.id === p.id));
   const others = playerPool.filter(p => !restedPlayers.some(r => r.id === p.id));
   let pool = [...rested, ...others];
@@ -11682,6 +11765,28 @@ function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0)
     const withJitter = pool.map(p => ({ p, j: p.rating + (Math.random() * JITTER * 2 - JITTER) }));
     withJitter.sort((a, b) => b.j - a.j);
     pool = withJitter.map(x => x.p);
+  }
+
+  // Bench rescue: if bench slots exist, ensure no rested player is benched when
+  // a non-rested player can take their place. Swap from the tail of the court zone
+  // (position courts*4-1 downward) to minimise disruption to rating-based ordering
+  // for balanced/tiered; for random the pool is already unordered so any swap is fine.
+  const courtSlots = courts * 4;
+  if (pool.length > courtSlots && restedPlayers.length > 0) {
+    let courtTail = courtSlots - 1; // last court slot, scan backward for swap target
+    for (let i = courtSlots; i < pool.length; i++) {
+      if (!restedPlayers.some(r => r.id === pool[i].id)) continue; // not rested — fine on bench
+      // Find the rightmost non-rested player in the court zone to swap out
+      while (courtTail >= 0) {
+        if (!restedPlayers.some(r => r.id === pool[courtTail].id)) {
+          [pool[i], pool[courtTail]] = [pool[courtTail], pool[i]];
+          courtTail--;
+          break;
+        }
+        courtTail--;
+      }
+      if (courtTail < 0) break; // no more non-rested court players to swap — stop
+    }
   }
 
   const lineup = [];
@@ -11711,7 +11816,7 @@ function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0)
   return lineup;
 }
 
-function _generateRoundWithRotation(playerPool, courts, mode, allHistoricPairs, recentPairs, restedPlayers, roundIndex = 1) {
+function _generateRoundWithRotation(playerPool, courts, mode, pairFrequency, lastRoundPairs, restedPlayers, roundIndex = 1) {
   const rested = playerPool.filter(p => restedPlayers.some(r => r.id === p.id));
   const others = playerPool.filter(p => !restedPlayers.some(r => r.id === p.id));
   const basePool = [...rested, ...others];
@@ -11726,10 +11831,16 @@ function _generateRoundWithRotation(playerPool, courts, mode, allHistoricPairs, 
     const candidate = _generateRound(pool, courts, mode, restedPlayers, roundIndex);
     const roundPairs = _buildRoundPairs(candidate);
 
-    // Weighted score: recent repeats (last 2 rounds) penalised 3x, historic 1x
-    const recentRepeats  = _countSetOverlap(roundPairs, recentPairs);
-    const historicRepeats = _countSetOverlap(roundPairs, allHistoricPairs);
-    const score = (3 * recentRepeats) + historicRepeats;
+    // Frequency-weighted score: Σ(count²) across all pairs in this candidate.
+    // Squaring penalises heavily-repeated pairs far more than evenly-spread ones.
+    // Flat +2 additive per pair also present in lastRoundPairs — discourages
+    // back-to-back repeats without reintroducing a full rolling window.
+    let score = 0;
+    roundPairs.forEach(k => {
+      const freq = pairFrequency.get(k) || 0;
+      score += freq * freq;
+      if (lastRoundPairs.has(k)) score += 2;
+    });
 
     if (score === 0) return { lineup: candidate, notice: null };
     if (score < bestScore) {
@@ -11746,7 +11857,7 @@ function _generateRoundWithRotation(playerPool, courts, mode, allHistoricPairs, 
 
 // Build a Set of all partner pairs and opponent cross-pairs for a round lineup.
 // Keys are sorted player-id pairs joined by '|' — same format for both pair types
-// so the blacklist treats "played with" and "played against" equivalently.
+// so the scoring treats "played with" and "played against" equivalently.
 function _buildRoundPairs(lineup) {
   const pairs = new Set();
   lineup.forEach(court => {
@@ -11759,13 +11870,6 @@ function _buildRoundPairs(lineup) {
     teamA.forEach(pa => teamB.forEach(pb => pairs.add([pa, pb].sort().join('|'))));
   });
   return pairs;
-}
-
-// Count how many keys in setA also appear in setB.
-function _countSetOverlap(setA, setB) {
-  let count = 0;
-  setA.forEach(k => { if (setB.has(k)) count++; });
-  return count;
 }
 
 function _shuffleArray(arr) {
