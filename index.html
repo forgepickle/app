@@ -6690,12 +6690,19 @@ function exitDemoMode() {
   if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
   _stopSessionSync(); // Safety: clear session sync if active during demo exit
 
-  // Show fresh password screen
-  document.getElementById('pwInput').value = '';
-  document.getElementById('pwErrorMsg').classList.remove('visible');
-  document.getElementById('pwInput').classList.remove('pw-error');
-  document.getElementById('pwHint').textContent = 'Shared with your group by the organiser';
-  showPasswordScreen();
+  // Return to origin: group page → password screen, landing page → home
+  const returnGroup = readGroupParam();
+  if (returnGroup && returnGroup !== 'demo') {
+    // User entered demo from a real group page — return to that group's password screen
+    document.getElementById('pwInput').value = '';
+    document.getElementById('pwErrorMsg').classList.remove('visible');
+    document.getElementById('pwInput').classList.remove('pw-error');
+    document.getElementById('pwHint').textContent = 'Shared with your group by the organiser';
+    showPasswordScreen();
+  } else {
+    // User entered demo via landing page (?group=demo or no param) — go home
+    window.location.href = 'https://forgepickle.github.io/';
+  }
 }
 
 // ==========================================================
