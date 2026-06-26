@@ -6338,6 +6338,25 @@ function getAppUrl() {
 }
 
 /**
+ * Rewrite the PWA manifest start_url to include the current group ID.
+ * Called at startup before any UI renders, so iOS/Android "Add to Home Screen"
+ * captures the group-specific URL instead of the bare /app/ root.
+ */
+function _injectManifest(groupId) {
+  try {
+    const tag = document.querySelector('link[rel="manifest"]');
+    if (!tag) return;
+    const b64      = tag.href.split(',')[1];
+    const manifest = JSON.parse(decodeURIComponent(escape(atob(b64))));
+    manifest.start_url = groupId
+      ? 'https://forgepickle.github.io/app/?group=' + groupId
+      : 'https://forgepickle.github.io/app/';
+    const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+    tag.href = URL.createObjectURL(blob);
+  } catch (e) { /* silent fail — static manifest remains as fallback */ }
+}
+
+/**
  * Show group name pill on password screen.
  * If no name or demo mode: hide pill and restore logo margin.
  */
@@ -6458,6 +6477,7 @@ async function startup() {
 
   // ── Step 1: Read ?group= URL param ──
   const groupParam = readGroupParam();
+  _injectManifest(groupParam); // bake group ID into PWA manifest start_url for home screen
 
   if (!groupParam) {
     // No group ID in URL — user followed a bare link
