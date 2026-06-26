@@ -2,10 +2,34 @@
 <!--
   ╔══════════════════════════════════════════════╗
   ║  FORGE — Your Pickleball Mettle              ║
-  ║  Version: 9.0.2 — Shuffle Algorithm Upgrade  ║
-  ║  Date: 2026-06-11                             ║
+  ║  Version: 9.1.0 — Multi-Group Routing         ║
+  ║  Date: 2026-06-26                             ║
   ║  Changes:                                     ║
-  ║  (1) Bench rescue: after sort/shuffle,        ║
+  ║  (1) Multi-group routing: ?group=XXXX URL     ║
+  ║      param resolves gasUrl via central        ║
+  ║      registry (RegistryCode.gs). GAS_URL is   ║
+  ║      now set dynamically at startup, not a    ║
+  ║      hardcoded const.                         ║
+  ║  (2) premiumMain from registry (not getConfig)║
+  ║      premiumDemo hardcoded true.              ║
+  ║  (3) Auth key scoped per group:               ║
+  ║      forge_auth_{groupId}                     ║
+  ║  (4) Error screens: no group link, group not  ║
+  ║      found, registry unreachable (+ retry).   ║
+  ║  (5) Startup loading state (logo + spinner)   ║
+  ║      while registry JSONP resolves.           ║
+  ║  (6) Group name pill on password screen.      ║
+  ║  (7) In-app version banner: shows when        ║
+  ║      backendVersion < minBackendVersion from  ║
+  ║      registry. Dismissible per session.       ║
+  ║  (8) All share URLs include ?group=XXXX via   ║
+  ║      getAppUrl(). isDemoMode → ?group=demo.   ║
+  ║  (9) localStorage registry cache (1hr TTL).  ║
+  ║      Stale cache fallback when unreachable.  ║
+  ║  (10) versionIsOlder() uses integer split —  ║
+  ║       fixes parseFloat('3.10')=3.1 bug.      ║
+  ║                                              ║
+  ║  v9.0.2 — Shuffle Algorithm Upgrade          ║
   ║      any rested player stranded in bench zone ║
   ║      is swapped with weakest non-rested       ║
   ║      court-zone player (position courts*4-1). ║
@@ -878,6 +902,115 @@ body {
   top: 60px; right: -30px;
   pointer-events: none; z-index: 0;
 }
+
+/* ════════════════════════════════════════════
+   STARTUP — Loading, Error Screens, Group Name Pill, Version Banner
+════════════════════════════════════════════ */
+#startupLoading {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 2;
+}
+#startupLoading.show { display: flex; }
+.startup-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid rgba(170,220,50,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-top: 18px;
+}
+
+#startupError {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 40px clamp(20px, 6vw, 36px);
+  text-align: center;
+  z-index: 2;
+  overflow-y: auto;
+}
+#startupError.show { display: flex; }
+.startup-error-icon {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  flex-shrink: 0;
+}
+.startup-error-icon.neutral { background: rgba(122,122,122,0.08); border: 1.5px solid var(--grey-light); }
+.startup-error-icon.danger  { background: var(--error-bg); border: 1.5px solid rgba(217,64,64,0.3); }
+.startup-error-icon.accent  { background: var(--accent-bg); border: 1.5px solid rgba(170,220,50,0.3); }
+.startup-error-title {
+  font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700; font-size: 22px; color: var(--black); margin-bottom: 10px;
+}
+.startup-error-body { font-size: 14px; color: var(--grey-mid); line-height: 1.6; max-width: 280px; }
+.startup-error-hint {
+  margin-top: 16px; background: var(--grey-xlight); border-radius: 10px;
+  padding: 12px 16px; font-size: 12px; color: var(--grey-mid);
+  text-align: left; line-height: 1.6; max-width: 280px; width: 100%; box-sizing: border-box;
+}
+.startup-error-hint code { font-size: 11px; }
+.startup-landing-link { margin-top: 18px; font-size: 13px; color: var(--grey-mid); }
+.startup-landing-link a { color: var(--accent-dim); font-weight: 600; text-decoration: none; }
+.startup-retry-btn {
+  margin-top: 20px; background: var(--accent); border: none; border-radius: 12px;
+  padding: 14px 32px;
+  font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700; font-size: 16px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--black); cursor: pointer; box-shadow: 0 4px 16px rgba(170,220,50,0.35);
+  transition: background 0.15s;
+}
+.startup-retry-btn:hover { background: var(--accent-dim); }
+.startup-retry-btn:active { transform: scale(0.98); }
+
+/* Group name pill — shown between logo and pw-card when group name is available */
+.group-name-pill {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  border: 1px solid rgba(170,220,50,0.35);
+  border-radius: 20px;
+  padding: 5px 18px;
+  margin-bottom: 16px;
+  max-width: min(360px, 90vw);
+  animation: slideDown 0.55s cubic-bezier(0.22,1,0.36,1) 0.05s both;
+}
+.group-name-pill.show { display: flex; }
+.group-name-pill-text {
+  font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 800; font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--accent-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+/* Version banner — shown at top of Players screen when Code.gs is below minBackendVersion */
+#versionBanner {
+  display: none;
+  background: #fff8ec; border: 0.5px solid #f0c060; border-radius: 8px;
+  padding: 10px 14px; margin: 8px clamp(12px,4vw,20px) 0;
+  flex-direction: row; align-items: flex-start; gap: 10px;
+}
+#versionBanner.show { display: flex; }
+.vbanner-icon { flex-shrink: 0; margin-top: 1px; color: #d97706; }
+.vbanner-body { flex: 1; }
+.vbanner-title { font-size: 11px; font-weight: 700; color: #b45309; margin-bottom: 2px; letter-spacing: 0.3px; }
+.vbanner-text  { font-size: 11px; color: #92400e; line-height: 1.5; }
+.vbanner-link  { font-size: 11px; color: var(--accent-dim); font-weight: 700; text-decoration: none; display: inline-block; margin-top: 4px; }
+.vbanner-dismiss {
+  flex-shrink: 0; background: none; border: none; cursor: pointer; padding: 2px;
+  color: var(--grey-mid); line-height: 1; font-size: 20px; align-self: flex-start;
+}
+.vbanner-dismiss:hover { color: var(--black); }
 
 /* Welcome flash */
 /* ══════════════════════════════════════════════
@@ -4446,6 +4579,11 @@ body {
     <div class="logo-underline"></div>
   </div>
 
+  <!-- Group name pill — populated by _renderGroupNamePill() when group name is available from registry -->
+  <div class="group-name-pill" id="groupNamePill">
+    <span class="group-name-pill-text" id="groupNamePillText"></span>
+  </div>
+
   <div class="pw-card" id="pwCard">
     <div class="pw-card-label">Group Access</div>
     <div class="input-wrap">
@@ -4489,6 +4627,25 @@ body {
 </div>
 
 <!-- ══════════════════════════════════════
+     STARTUP LOADING — shown during registry JSONP call
+══════════════════════════════════════ -->
+<div id="startupLoading">
+  <div class="logo-block" style="width:100%; padding-left:32px; box-sizing:border-box; margin-bottom:16px; text-align:left;">
+    <div class="logo-row1">Forge</div>
+    <div class="logo-row2">your pickleball <span class="accent-word">mettle</span></div>
+    <div class="logo-underline"></div>
+  </div>
+  <div class="startup-spinner"></div>
+</div>
+
+<!-- ══════════════════════════════════════
+     STARTUP ERROR — no-group / not-found / unreachable
+══════════════════════════════════════ -->
+<div id="startupError">
+  <!-- Populated dynamically by showStartupError(type) -->
+</div>
+
+<!-- ══════════════════════════════════════
      APP SHELL (hidden until login)
 ══════════════════════════════════════ -->
 <div id="appShell" style="display:none;">
@@ -4512,6 +4669,20 @@ body {
 
   <!-- ══ SCREEN 1: PLAYERS ══ -->
   <div class="screen active" id="screenPlayers">
+
+    <!-- Version banner — shown when group's Code.gs backendVersion < registry minBackendVersion.
+         Dismissible per session. Populated and shown by _showVersionBannerIfNeeded(). -->
+    <div id="versionBanner">
+      <div class="vbanner-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div class="vbanner-body">
+        <div class="vbanner-title">Update available</div>
+        <div class="vbanner-text">Your group's backend needs updating. Ask your admin to update Code.gs.</div>
+        <a class="vbanner-link" href="#" target="_blank" rel="noopener">How to update →</a>
+      </div>
+      <button class="vbanner-dismiss" onclick="dismissVersionBanner()" aria-label="Dismiss update notice">&times;</button>
+    </div>
 
     <!-- Skeleton -->
     <div class="skeleton-list" id="skeletonList">
@@ -5533,8 +5704,17 @@ body {
    Frontend: GitHub Pages
 ============================================ */
 
-// == Backend URL ==
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyqpFMzHVSiLai1Hf8iM_QMTTMukDTfRd5R-obOCpHa6i1umYmFP-9JuYocNVtx0dsk/exec';
+// == Backend URLs ==
+// GAS_URL is set dynamically at startup after registry lookup (was a hardcoded const pre-v9.1.0).
+// REGISTRY_URL is the central registry GAS — one deployment for all groups.
+let GAS_URL     = '';
+const REGISTRY_URL = 'https://script.google.com/macros/s/AKfycbwzOsYwREmcJCqgGXkQ5FlWwZ4zIb-GS3ObnB7go070h_uwjQ-W3w2Fq9x8MbZIHy5kfQ/exec';
+
+// == Multi-group routing state ==
+let currentGroupId   = null;  // set by readGroupParam() in startup — read from ?group= URL param
+let currentGroupName = '';    // from registry getGroup response — shown on password screen
+let minBackendVersion  = null;  // from registry — compared against Code.gs backendVersion
+let registryUpdateUrl  = '';    // from registry — linked in version banner
 
 
 // ═══════════════════════════════════════════════
@@ -5784,8 +5964,8 @@ let mlFilteredCache = [];
 let mlRenderedCount = 0;
 
 // == Forge Alpha state ==
-let premiumMain             = 0;    // from getConfig — production Alpha gate
-let premiumDemo             = 0;    // from getConfig — demo Alpha gate (default 1 via GAS)
+let premiumMain             = false; // from registry getGroup — production Alpha gate (not from getConfig)
+let premiumDemo             = true;  // hardcoded — demo always shows Alpha features (not read from CONFIG sheet)
 let alphaLambda             = 0.1;  // from getConfig — Attribution decay rate
 let alphaCache              = null; // computed on first Alpha interaction, cleared by refreshAllData
 let top3sDirty              = true; // re-render Top 3s HTML on next tab switch after data refresh
@@ -5918,7 +6098,7 @@ function getPayload(action, extras) {
 
 function saveSession(password) {
   try {
-    sessionStorage.setItem('forge_auth', JSON.stringify({
+    sessionStorage.setItem('forge_auth_' + currentGroupId, JSON.stringify({
       password,
       savedAt: Date.now()
     }));
@@ -5927,7 +6107,7 @@ function saveSession(password) {
 
 function loadSession() {
   try {
-    const raw = sessionStorage.getItem('forge_auth');
+    const raw = sessionStorage.getItem('forge_auth_' + currentGroupId);
     if (!raw) return null;
     const s = JSON.parse(raw);
     if (!s || !s.password) return null;
@@ -5936,7 +6116,11 @@ function loadSession() {
 }
 
 function clearSession() {
-  try { sessionStorage.removeItem('forge_auth'); } catch(e) {}
+  try {
+    sessionStorage.removeItem('forge_auth_' + currentGroupId);
+    // Remove legacy pre-v9.1.0 orphaned key (single-group auth — no longer used)
+    sessionStorage.removeItem('forge_auth');
+  } catch(e) {}
 }
 
 // ==========================================================
@@ -6038,52 +6222,322 @@ function applyMatchToPair(id1, id2, m, isTeamA) {
 }
 
 // ==========================================================
+// MULTI-GROUP ROUTING HELPERS (v9.1.0)
+// ==========================================================
+
+/** Read ?group= URL param. Returns lowercase string or null. */
+function readGroupParam() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const v = (p.get('group') || '').trim().toLowerCase();
+    return v || null;
+  } catch(e) { return null; }
+}
+
+/**
+ * Generic JSONP fetch. Appends ?callback=__cb_{n} to url.
+ * Resolves with parsed data or rejects on timeout/error.
+ */
+function _jsonpFetch(url, timeoutMs) {
+  timeoutMs = timeoutMs || 12000;
+  return new Promise(function(resolve, reject) {
+    const cbName = '__forgeCb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    let timer;
+    window[cbName] = function(data) {
+      clearTimeout(timer);
+      try { delete window[cbName]; } catch(e) { window[cbName] = undefined; }
+      const tag = document.getElementById(cbName);
+      if (tag) tag.parentNode.removeChild(tag);
+      resolve(data);
+    };
+    timer = setTimeout(function() {
+      try { delete window[cbName]; } catch(e) { window[cbName] = undefined; }
+      const tag = document.getElementById(cbName);
+      if (tag) tag.parentNode.removeChild(tag);
+      reject(new Error('JSONP timeout'));
+    }, timeoutMs);
+    const script = document.createElement('script');
+    script.id = cbName;
+    script.onerror = function() {
+      clearTimeout(timer);
+      try { delete window[cbName]; } catch(e) { window[cbName] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+      reject(new Error('JSONP script error'));
+    };
+    script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cbName;
+    document.head.appendChild(script);
+  });
+}
+
+/**
+ * Fetch group config from registry. Uses localStorage 1hr cache.
+ * Returns null on unreachable (no cache). Returns data with _stale:true when using stale cache.
+ */
+async function getRegistryGroup(groupId) {
+  const cacheKey = 'forge_registry_' + groupId;
+  const TTL = 60 * 60 * 1000; // 1 hour
+  let cached = null;
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (raw) cached = JSON.parse(raw);
+  } catch(e) {}
+
+  if (cached && cached._cachedAt && (Date.now() - cached._cachedAt) < TTL) {
+    // Fresh cache hit
+    return cached;
+  }
+
+  // Attempt live fetch
+  try {
+    const regUrl = REGISTRY_URL + '?action=getGroup&group_id=' + encodeURIComponent(groupId);
+    const data = await _jsonpFetch(regUrl, 12000);
+    if (data) {
+      // Only cache successful lookups — never cache ok:false so a newly
+      // registered group is found on the next attempt without waiting for TTL.
+      if (data.ok) {
+        data._cachedAt = Date.now();
+        data._stale = false;
+        try { localStorage.setItem(cacheKey, JSON.stringify(data)); } catch(e) {}
+      }
+      return data;
+    }
+  } catch(e) {
+    // Network unreachable — fall through to stale cache
+  }
+
+  if (cached) {
+    cached._stale = true;
+    return cached;
+  }
+  return null;
+}
+
+/**
+ * Compare two semver strings (major.minor only). Returns true if v < minV.
+ * Uses integer parsing to avoid parseFloat('3.10') === 3.1 bug.
+ */
+function versionIsOlder(v, minV) {
+  const parse = function(s) { return String(s).split('.').map(Number); };
+  const a = parse(v),   b = parse(minV);
+  const maj = a[0] || 0, min = a[1] || 0;
+  const minMaj = b[0] || 0, minMin = b[1] || 0;
+  if (maj !== minMaj) return maj < minMaj;
+  return min < minMin;
+}
+
+/**
+ * Returns the canonical app URL including current group param.
+ * isDemoMode is checked FIRST so "Try demo" button path works even when
+ * currentGroupId is still set to the real group.
+ */
+function getAppUrl() {
+  if (isDemoMode) return 'https://forgepickle.github.io/app/?group=demo';
+  return currentGroupId
+    ? 'https://forgepickle.github.io/app/?group=' + currentGroupId
+    : 'https://forgepickle.github.io/app/';
+}
+
+/**
+ * Show group name pill on password screen.
+ * If no name or demo mode: hide pill and restore logo margin.
+ */
+function _renderGroupNamePill() {
+  const pill = document.getElementById('groupNamePill');
+  const pillText = document.getElementById('groupNamePillText');
+  const logoBlock = document.querySelector('#pwScreen .logo-block');
+  if (!pill || !pillText) return;
+  if (currentGroupName && currentGroupId && currentGroupId !== 'demo') {
+    const display = currentGroupName.length > 30
+      ? currentGroupName.slice(0, 30) + '…'
+      : currentGroupName;
+    pillText.textContent = display;
+    pill.classList.add('show');
+    if (logoBlock) logoBlock.style.marginBottom = '20px';
+  } else {
+    pill.classList.remove('show');
+    pillText.textContent = '';
+    if (logoBlock) logoBlock.style.marginBottom = '';
+  }
+}
+
+/**
+ * Render a startup error screen. Hides loading + pwScreen.
+ * type: 'no-group' | 'not-found' | 'unreachable'
+ */
+function showStartupError(type) {
+  const loadEl  = document.getElementById('startupLoading');
+  const errorEl = document.getElementById('startupError');
+  const pwEl    = document.getElementById('pwScreen');
+  if (loadEl)  loadEl.classList.remove('show');
+  if (pwEl)    pwEl.style.display = 'none';
+  if (!errorEl) return;
+
+  const LANDING = 'https://forgepickle.github.io/';
+  let iconClass = 'neutral', iconSvg = '', title = '', body = '', hint = '', extra = '';
+
+  if (type === 'no-group') {
+    iconClass = 'neutral';
+    iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+    title     = 'No group link';
+    body      = 'This link doesn\'t include a group ID.';
+    hint      = 'Links look like: <code>forgepickle.github.io/app/?group=abc123</code>';
+    extra     = '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Get your group link at the Forge landing page →</a>';
+  } else if (type === 'not-found') {
+    iconClass = 'danger';
+    iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+    title     = 'Group not found';
+    body      = 'This group ID doesn\'t exist in the Forge registry.';
+    hint      = 'Double-check your link or ask your group admin for the correct URL.';
+    extra     = '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Register a new group at the Forge landing page →</a>';
+  } else if (type === 'unreachable') {
+    iconClass = 'accent';
+    iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>';
+    title     = 'Registry unreachable';
+    body      = 'Can\'t connect to the Forge registry right now.';
+    hint      = 'Check your internet connection and try again.';
+    extra     = '<button class="startup-retry-btn" onclick="_retryStartup()">Try again</button>';
+  }
+
+  const logoBlock =
+    '<div class="logo-block" style="width:100%; padding-left:32px; box-sizing:border-box; margin-bottom:24px; text-align:left;">' +
+      '<div class="logo-row1">Forge</div>' +
+      '<div class="logo-row2">your pickleball <span class="accent-word">mettle</span></div>' +
+      '<div class="logo-underline"></div>' +
+    '</div>';
+
+  errorEl.innerHTML =
+    logoBlock +
+    '<div class="startup-error-icon ' + iconClass + '">' + iconSvg + '</div>' +
+    '<div class="startup-error-title">' + title + '</div>' +
+    '<div class="startup-error-body">' + body + '</div>' +
+    (hint ? '<div class="startup-error-hint">' + hint + '</div>' : '') +
+    extra;
+  errorEl.classList.add('show');
+}
+
+/** Clear error screen and restart routing. */
+function _retryStartup() {
+  const errorEl = document.getElementById('startupError');
+  if (errorEl) {
+    errorEl.classList.remove('show');
+    errorEl.innerHTML = '';
+  }
+  startup();
+}
+
+/**
+ * Show version banner if backend is older than registry minimum.
+ * Dismissed per-group per-session via sessionStorage.
+ */
+function _showVersionBannerIfNeeded(backendVersion) {
+  if (!minBackendVersion) return;
+  if (!versionIsOlder(backendVersion, minBackendVersion)) return;
+  const dismissKey = 'forge_vbanner_' + currentGroupId;
+  if (sessionStorage.getItem(dismissKey)) return;
+  const banner = document.getElementById('versionBanner');
+  if (!banner) return;
+  const link = banner.querySelector('.vbanner-link');
+  if (link) link.href = registryUpdateUrl || 'https://forgepickle.github.io/';
+  banner.classList.add('show');
+}
+
+/** Dismiss version banner for this session (reappears next session). */
+function dismissVersionBanner() {
+  sessionStorage.setItem('forge_vbanner_' + currentGroupId, '1');
+  const banner = document.getElementById('versionBanner');
+  if (banner) banner.classList.remove('show');
+}
+
+// ==========================================================
 // STARTUP = CHECK SESSION THEN LOAD CONFIG
 // ==========================================================
 
 async function startup() {
   // ── Step 0: Always reset UI to known clean state before anything else ──
-  // Prevents previous session state leaking behind the password screen
   _resetAppUI();
 
-  // ── Step 1: Load config via JSONP GET (no CORS issues) ──
+  // ── Step 1: Read ?group= URL param ──
+  const groupParam = readGroupParam();
+
+  if (!groupParam) {
+    // No group ID in URL — user followed a bare link
+    showStartupError('no-group');
+    return;
+  }
+
+  if (groupParam === 'demo') {
+    // Reserved ID: bypass registry, go straight to demo
+    premiumMain = false;
+    enterDemoMode();
+    return;
+  }
+
+  // ── Step 2: Resolve group from registry (with cache) ──
+  currentGroupId = groupParam;
+  const loadEl = document.getElementById('startupLoading');
+  if (loadEl) loadEl.classList.add('show');
+
+  const regData = await getRegistryGroup(groupParam);
+
+  if (loadEl) loadEl.classList.remove('show');
+
+  if (!regData) {
+    showStartupError('unreachable');
+    return;
+  }
+  if (!regData.ok) {
+    showStartupError('not-found');
+    return;
+  }
+
+  // ── Step 3: Apply registry data ──
+  GAS_URL              = regData.gasUrl            || '';
+  currentGroupName     = regData.groupName         || '';
+  premiumMain          = !!regData.premium;
+  minBackendVersion    = regData.minBackendVersion  || null;
+  registryUpdateUrl    = regData.updateUrl          || '';
+
+  if (regData._stale) {
+    console.warn('Forge: using stale registry cache for group', groupParam);
+  }
+
+  // ── Step 4: Load group config from Code.gs ──
   try {
     const cfg = await callBackendGet('getConfig');
     STARTING_RATING  = cfg.startingRating || 3.50;
     K_FACTOR         = cfg.kFactor        || 32;
     K_SCALE          = cfg.kScale         || 30;
     lastKnownVersion = cfg.writeVersion   || 0;
-    // Forge Alpha access flags — use safe defaults if keys absent
-    if (cfg.premiumMain   !== undefined) premiumMain      = cfg.premiumMain;
-    if (cfg.premiumDemo   !== undefined) premiumDemo      = cfg.premiumDemo;
-    if (cfg.alphaLambda   !== undefined) alphaLambda      = cfg.alphaLambda;
+    // premiumMain: registry is authoritative — NOT read from getConfig (set above)
+    // premiumDemo: hardcoded true — NOT read from getConfig
+    if (cfg.alphaLambda   !== undefined) alphaLambda       = cfg.alphaLambda;
     if (cfg.shuffleJitter  !== undefined) shuffleBaseJitter = cfg.shuffleJitter;
     if (cfg.lastExportAt   !== undefined) adminLastExport   = cfg.lastExportAt;
+    _showVersionBannerIfNeeded(cfg.backendVersion || '0');
   } catch(e) {
     console.warn('Config fetch failed:', e.message);
     const hint = document.getElementById('pwHint');
     if (hint) hint.textContent = '⚠ Cannot reach server. Check connection.';
   }
 
-  // ── Step 2: Check session storage ──
+  // ── Step 5: Check saved session ──
   const savedPassword = loadSession();
   if (savedPassword) {
     APP_AUTH_TOKEN = savedPassword;
     try {
       await callBackend({ action: 'login', password: savedPassword });
-      // Session valid — show splash then fetch fresh data.
-      // Backend was just warmed by the login call above, so Phase 1 min is shorter.
+      // Session valid — show splash then fetch fresh data
       document.getElementById('splashScreen').classList.add('show');
       _runSplashThenLaunch(1200);
       return;
     } catch(e) {
-      // Session invalid (password changed, or network error) — clear and show login
+      // Session invalid — clear and show login
       clearSession();
       APP_AUTH_TOKEN = '';
     }
   }
 
-  // ── Step 3: Show password screen ──
+  // ── Step 6: Show password screen with group pill ──
   showPasswordScreen();
 }
 
@@ -6121,6 +6575,12 @@ function _resetAppUI() {
   document.getElementById('ballDeco1').style.display = 'none';
   document.getElementById('ballDeco2').style.display = 'none';
 
+  // Hide startup loading and error screens (v9.1.0 multi-group routing)
+  const startupLoadEl  = document.getElementById('startupLoading');
+  const startupErrorEl = document.getElementById('startupError');
+  if (startupLoadEl)  startupLoadEl.classList.remove('show');
+  if (startupErrorEl) { startupErrorEl.classList.remove('show'); startupErrorEl.innerHTML = ''; }
+
   // Close any open modals
   ['addPlayerModal','removeModal','deleteMatchModal','reinstateModal','tooltipModal','leaveMatchModal','debriefModal','deleteSessionModal','endSessionModal','startOverModal','adminPwModal','adminPanelModal'].forEach(id => {
     const el = document.getElementById(id);
@@ -6157,6 +6617,9 @@ function showPasswordScreen() {
   document.getElementById('navBar').classList.remove('visible');
   document.getElementById('appHeader').classList.remove('visible');
   document.getElementById('demoBanner').classList.remove('show');
+
+  // Render group name pill with current group info (v9.1.0)
+  _renderGroupNamePill();
 
   // Show password screen
   document.getElementById('pwScreen').style.display   = 'flex';
@@ -7089,7 +7552,7 @@ function shareDebrief() {
   const pairLines = (pairATotal >= 2 || pairBTotal >= 2)
     ? `Pair record going in:\n${pairATotal >= 2 ? `${teamANames.join(' & ')} — ${pairAObj.wins}W ${pairAObj.losses}L (${Math.round(pairAObj.wins/(pairAObj.wins+pairAObj.losses||1)*100)}%)` : ''}\n${pairBTotal >= 2 ? `${teamBNames.join(' & ')} — ${pairBObj.wins}W ${pairBObj.losses}L (${Math.round(pairBObj.wins/(pairBObj.wins+pairBObj.losses||1)*100)}%)` : ''}`.trim()
     : '';
-  const APP_URL = 'https://forgepickle.github.io/app';
+  const APP_URL = getAppUrl();
   const parts = [
     `${badge.icon} ${badge.text}`,
     '',
@@ -7209,7 +7672,7 @@ function closeShareCard() {
 
 function nativeShareCard() {
   const text = window._shareText || 'Check out Forge — pickleball rating tracker';
-  const url  = window._shareUrl  || 'https://forgepickle.github.io/app/';
+  const url  = window._shareUrl  || getAppUrl();
   if (navigator.share) {
     // URL is already embedded in text; pass separately for native share sheet
     navigator.share({ title: 'Forge Match Result', text, url })
@@ -7297,7 +7760,7 @@ ${ratingDeltaLines}
 ${ratingProgressLines}
 
 Track your game on Forge 👇 (free forever!)`;
-  window._shareUrl  = 'https://forgepickle.github.io/app/';
+  window._shareUrl  = getAppUrl();
 
   // White-background card
   const winnerColA  = teamAWon ? '#2d7a00' : (!tied ? '#999' : '#666');
@@ -7332,7 +7795,7 @@ Track your game on Forge 👇 (free forever!)`;
       <div class="share-card-footer-icon">F</div>
       <div class="share-card-footer-text">
         <div class="share-card-footer-title">Track your pickleball game</div>
-        <div class="share-card-footer-url">forgepickle.github.io/app/</div>
+        <div class="share-card-footer-url">${getAppUrl().replace('https://','')}</div>
       </div>
     </div>
   `;
@@ -9497,8 +9960,9 @@ function updateApFilterDesc() {
 // ==========================================================
 
 function isPremiumActive() {
-  // In demo mode check premiumDemo flag; in production check premiumMain.
-  return isDemoMode ? premiumDemo === 1 : premiumMain === 1;
+  // In demo mode check premiumDemo (hardcoded true); in production check premiumMain (from registry).
+  // Uses truthy check — compatible with boolean true/false and legacy numeric 1/0.
+  return isDemoMode ? !!premiumDemo : !!premiumMain;
 }
 
 function _enterAlphaTab() {
@@ -11055,7 +11519,7 @@ function shareSession() {
     + `\n`
     + `Lineup is ready — open the app to see your court assignments!\n`
     + `\n`
-    + `--- Smash it on Forge 🏓  https://forgepickle.github.io/app`;
+    + `--- Smash it on Forge 🏓  ${getAppUrl()}`;
 
   if (navigator.share) {
     navigator.share({ title: 'FORGE Pickleball Session', text: msg }).catch(() => {});
