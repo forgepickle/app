@@ -975,23 +975,31 @@ body {
 /* Group name pill — shown between logo and pw-card when group name is available */
 .group-name-pill {
   display: none;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: var(--accent-bg);
-  border: 1px solid rgba(170,220,50,0.35);
+  gap: 4px;
+  background: var(--accent);
   border-radius: 20px;
-  padding: 5px 18px;
+  padding: 8px 22px 7px;
   margin-bottom: 16px;
+  width: 100%;
   max-width: min(360px, 90vw);
+  cursor: pointer;
   animation: slideDown 0.55s cubic-bezier(0.22,1,0.36,1) 0.05s both;
 }
 .group-name-pill.show { display: flex; }
 .group-name-pill-text {
   font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, sans-serif;
-  font-weight: 800; font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
-  color: var(--accent-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 260px;
+  font-weight: 800; font-size: 17px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--black); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.group-name-pill-id {
+  display: flex; align-items: center; gap: 4px;
+  font-family: 'Courier New', monospace; font-size: 12px;
+  color: rgba(0,0,0,0.5); line-height: 1;
+}
+.group-name-pill-id svg { opacity: 0.55; flex-shrink: 0; }
 
 /* Version banner — shown at top of Players screen when Code.gs is below minBackendVersion */
 #versionBanner {
@@ -4580,8 +4588,12 @@ body {
   </div>
 
   <!-- Group name pill — populated by _renderGroupNamePill() when group name is available from registry -->
-  <div class="group-name-pill" id="groupNamePill">
+  <div class="group-name-pill" id="groupNamePill" onclick="_copyGroupLink(this)">
     <span class="group-name-pill-text" id="groupNamePillText"></span>
+    <span class="group-name-pill-id" id="groupNamePillId">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span id="groupNamePillIdText"></span>
+    </span>
   </div>
 
   <div class="pw-card" id="pwCard">
@@ -6363,6 +6375,7 @@ function _injectManifest(groupId) {
 function _renderGroupNamePill() {
   const pill = document.getElementById('groupNamePill');
   const pillText = document.getElementById('groupNamePillText');
+  const pillIdText = document.getElementById('groupNamePillIdText');
   const logoBlock = document.querySelector('#pwScreen .logo-block');
   if (!pill || !pillText) return;
   if (currentGroupName && currentGroupId && currentGroupId !== 'demo') {
@@ -6370,13 +6383,31 @@ function _renderGroupNamePill() {
       ? currentGroupName.slice(0, 30) + '…'
       : currentGroupName;
     pillText.textContent = display;
+    if (pillIdText) pillIdText.textContent = '#' + currentGroupId;
     pill.classList.add('show');
     if (logoBlock) logoBlock.style.marginBottom = '20px';
   } else {
     pill.classList.remove('show');
     pillText.textContent = '';
+    if (pillIdText) pillIdText.textContent = '';
     if (logoBlock) logoBlock.style.marginBottom = '';
   }
+}
+
+/**
+ * Copy group share URL to clipboard on pill tap. Shows brief "Copied!" feedback.
+ */
+function _copyGroupLink(pill) {
+  const idSpan = document.getElementById('groupNamePillIdText');
+  if (!idSpan) return;
+  const url = getAppUrl();
+  navigator.clipboard.writeText(url).then(() => {
+    idSpan.textContent = 'Copied!';
+    setTimeout(() => { idSpan.textContent = '#' + currentGroupId; }, 1800);
+  }).catch(() => {
+    idSpan.textContent = url; // fallback: show URL as text
+    setTimeout(() => { idSpan.textContent = '#' + currentGroupId; }, 3000);
+  });
 }
 
 /**
