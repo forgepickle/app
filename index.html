@@ -6493,8 +6493,11 @@ function _injectManifest(groupId) {
     manifest.start_url = groupId
       ? 'https://forgepickle.github.io/app/?group=' + groupId
       : 'https://forgepickle.github.io/app/';
-    const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
-    tag.href = URL.createObjectURL(blob);
+    manifest.scope = 'https://forgepickle.github.io/app/';
+    // Use base64 data URI instead of blob: URL — iOS Safari rejects blob: for manifests
+    // but already reads data: URIs (the original manifest uses this format).
+    tag.href = 'data:application/manifest+json;base64,' +
+      btoa(unescape(encodeURIComponent(JSON.stringify(manifest))));
   } catch (e) { /* silent fail — static manifest remains as fallback */ }
 }
 
