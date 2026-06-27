@@ -504,6 +504,114 @@ body {
 }
 .modal-overlay.show .modal-sheet { transform: translateY(0); }
 
+/* ════════════════════════════════════════════
+   ADD TO HOME SCREEN (A2HS) — Banner + Sheet
+════════════════════════════════════════════ */
+#a2hsBanner {
+  position: fixed;
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
+  left: 0; right: 0;
+  z-index: 450;
+  display: flex;
+  align-items: center;
+  background: var(--black);
+  border-left: 3px solid var(--accent);
+  border-top: 0.5px solid #2a2a2a;
+  border-radius: 0;
+  min-height: 48px;
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.32,0.72,0,1);
+  pointer-events: none;
+  opacity: 0;
+}
+#a2hsBanner.show { transform: translateY(0); opacity: 1; pointer-events: all; }
+.a2hs-icon {
+  width: 38px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.a2hs-text {
+  flex: 1;
+  font-size: 12px;
+  color: #c8c8c4;
+  line-height: 1.4;
+  padding: 8px 6px 8px 0;
+}
+.a2hs-add-btn {
+  background: var(--accent);
+  color: var(--black);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'Barlow Condensed', -apple-system, sans-serif;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.a2hs-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--grey-mid);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 10px 0 8px;
+  flex-shrink: 0;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Extra screen padding when banner is visible — prevents content hiding behind it */
+body.a2hs-active .screen {
+  padding-bottom: calc(var(--nav-h) + var(--addbar-h) + 48px + env(safe-area-inset-bottom, 0px) + 8px);
+}
+body.a2hs-active #screenAddMatch {
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
+}
+/* A2HS instruction sheet */
+.a2hs-sheet-title {
+  font-family: 'Barlow Condensed', -apple-system, sans-serif;
+  font-weight: 900;
+  font-size: 20px;
+  letter-spacing: 0.3px;
+  color: var(--black);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.a2hs-step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.a2hs-step-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--black);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.a2hs-step-text {
+  font-size: 14px;
+  color: var(--grey-dark);
+  line-height: 1.5;
+}
+.a2hs-step-text strong { color: var(--black); font-weight: 700; }
+.a2hs-chrome-ios-note {
+  font-size: 13px;
+  color: var(--grey-mid);
+  line-height: 1.6;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.a2hs-chrome-ios-note strong { color: var(--grey-dark); }
+
 .modal-handle {
   width: 36px; height: 4px;
   background: var(--grey-light);
@@ -5432,6 +5540,28 @@ body {
 
 </div><!-- /appShell -->
 
+<!-- ── Add to Home Screen banner — fixed above nav bar ──────────────── -->
+<div id="a2hsBanner" role="complementary" aria-label="Add to home screen prompt">
+  <div class="a2hs-icon" aria-hidden="true">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+  </div>
+  <span class="a2hs-text">Add Forge to your home screen for the best experience</span>
+  <button class="a2hs-add-btn" type="button" onclick="_tapA2hsAdd()">Add</button>
+  <button class="a2hs-dismiss-btn" type="button" onclick="_dismissA2hsBanner(true)" aria-label="Dismiss">×</button>
+</div>
+
+<!-- ── A2HS instruction sheet modal ─────────────────────────────────── -->
+<div class="modal-overlay" id="a2hsModal" onclick="if(event.target===this)_closeA2hsSheet(false)">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="a2hs-sheet-title">Add to home screen</div>
+    <div id="a2hsSheetContent"></div>
+    <div class="modal-btns" style="margin-top:20px;">
+      <button class="modal-cancel" type="button" onclick="_a2hsSheetGotIt()">Got it</button>
+    </div>
+  </div>
+</div>
+
 <!-- Tooltip Info Sheet — outside appShell so it works in both
      password path and demo mode regardless of appShell visibility -->
 <div class="modal-overlay" id="tooltipModal">
@@ -6641,6 +6771,13 @@ function _resetAppUI() {
   const sc = document.getElementById('shareCardOverlay');
   if (sc) sc.classList.remove('show');
 
+  // Hide A2HS banner and sheet if showing
+  const a2hsBanner = document.getElementById('a2hsBanner');
+  const a2hsModal  = document.getElementById('a2hsModal');
+  if (a2hsBanner) a2hsBanner.classList.remove('show');
+  if (a2hsModal)  a2hsModal.classList.remove('show');
+  document.body.classList.remove('a2hs-active');
+
   // Reset add match wizard if it was open
   try { closeAddForm(); } catch(e) {}
 
@@ -7706,7 +7843,7 @@ function _doNavigateTo(screen) {
   if (screen !== 'players') closeAddForm();
   if (screen === 'add')         initAddMatch();
   if (screen === 'leaderboard') renderLeaderboard();
-  if (screen === 'matches')     initMatchList();
+  if (screen === 'matches')   { initMatchList(); maybeShowA2hsPrompt(); }
 
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById(screenMap[screen].screen);
@@ -10867,6 +11004,154 @@ function closeTooltipModal() { document.getElementById('tooltipModal').classList
 // EVENT LISTENERS + BOOT
 // ==========================================================
 
+// ═══════════════════════════════════════════════════════════════════
+// ADD TO HOME SCREEN (A2HS)
+// Rule 1: isDemoMode + activeSession guard in _shouldShowA2hs().
+// Rule 2: _a2hsPlatform const set once from UA — never inferred from
+//         prompt availability.
+// Suppression: banner × → permanent. iOS "Got it" → session only
+// (permanent written next standalone launch). Android accept →
+// permanent. Android dismiss → none (retry next session).
+// ═══════════════════════════════════════════════════════════════════
+
+const _a2hsPlatform = (function() {
+  var ua = navigator.userAgent;
+  // MacIntel + maxTouchPoints > 1 catches iPadOS 13+ (reports as desktop)
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'other';
+})();
+const _isChromeIOS = _a2hsPlatform === 'ios' && /CriOS/.test(navigator.userAgent);
+
+let _a2hsDeferredPrompt = null; // Android: captured beforeinstallprompt event
+
+function _a2hsSetSuppression() {
+  localStorage.setItem('forge_a2hs_dismissed', '1');
+}
+
+function _shouldShowA2hs() {
+  if (isDemoMode)    return false;
+  if (activeSession) return false; // session CTA takes priority — same fixed slot
+  // Already installed: set permanent key so we never evaluate again
+  if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) {
+    _a2hsSetSuppression(); return false;
+  }
+  if (localStorage.getItem('forge_a2hs_dismissed'))  return false;
+  if (sessionStorage.getItem('forge_a2hs_shown'))    return false;
+  return true;
+}
+
+function _initA2hs() {
+  if (!_shouldShowA2hs()) return;
+  // SW registration — Android only, required for beforeinstallprompt to fire
+  if (_a2hsPlatform === 'android' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(function() {});
+  }
+  window.addEventListener('beforeinstallprompt', function(e) {
+    e.preventDefault();
+    _a2hsDeferredPrompt = e;
+  });
+  window.addEventListener('appinstalled', function() {
+    _a2hsSetSuppression();
+    _dismissA2hsBanner(false);
+  });
+}
+
+function maybeShowA2hsPrompt() {
+  if (!_shouldShowA2hs()) return;
+  sessionStorage.setItem('forge_a2hs_shown', '1');
+  _showA2hsBanner();
+}
+
+function _showA2hsBanner() {
+  document.getElementById('a2hsBanner').classList.add('show');
+  document.body.classList.add('a2hs-active');
+}
+
+function _dismissA2hsBanner(permanent) {
+  document.getElementById('a2hsBanner').classList.remove('show');
+  document.body.classList.remove('a2hs-active');
+  if (permanent) _a2hsSetSuppression();
+}
+
+async function _tapA2hsAdd() {
+  if (_a2hsPlatform === 'ios') {
+    _showA2hsSheet();
+  } else if (_a2hsPlatform === 'android') {
+    if (!_a2hsDeferredPrompt) {
+      // SW may still be activating on first load — wait up to 2s before fallback
+      await new Promise(function(resolve) {
+        var t = setTimeout(resolve, 2000);
+        window.addEventListener('beforeinstallprompt', function(e) {
+          clearTimeout(t);
+          e.preventDefault();
+          _a2hsDeferredPrompt = e;
+          resolve();
+        }, { once: true });
+      });
+    }
+    if (_a2hsDeferredPrompt) {
+      _triggerNativePrompt();
+    } else {
+      _showA2hsSheet(); // genuine fallback — SW not available or criteria not met
+    }
+  } else {
+    // Desktop or unsupported browser — dismiss silently, no confusing instructions
+    _dismissA2hsBanner(true);
+  }
+}
+
+function _triggerNativePrompt() {
+  var p = _a2hsDeferredPrompt;
+  _a2hsDeferredPrompt = null;
+  p.prompt();
+  p.userChoice.then(function(c) {
+    if (c.outcome === 'accepted') _a2hsSetSuppression();
+  });
+}
+
+function _showA2hsSheet() {
+  var c = document.getElementById('a2hsSheetContent');
+  if (_isChromeIOS) {
+    c.innerHTML =
+      '<p class="a2hs-chrome-ios-note">Chrome on iOS doesn\'t support adding to home screen directly.</p>' +
+      '<p class="a2hs-chrome-ios-note">Open this page in <strong>Safari</strong>, then tap Share → Add to Home Screen.</p>';
+  } else if (_a2hsPlatform === 'ios') {
+    c.innerHTML =
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">1</div>' +
+      '<p class="a2hs-step-text">Tap the <strong>Share</strong> icon ' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">' +
+      '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>' +
+      ' in Safari\'s toolbar at the bottom of your screen</p></div>' +
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">2</div>' +
+      '<p class="a2hs-step-text">Scroll down and tap <strong>"Add to Home Screen"</strong></p></div>' +
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">3</div>' +
+      '<p class="a2hs-step-text">Tap <strong>"Add"</strong> in the top-right corner to confirm</p></div>';
+  } else {
+    // Android manual fallback (Samsung Internet, Firefox, SW not ready)
+    c.innerHTML =
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">1</div>' +
+      '<p class="a2hs-step-text">Tap the <strong>⋮ menu</strong> in Chrome\'s top-right corner</p></div>' +
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">2</div>' +
+      '<p class="a2hs-step-text">Tap <strong>"Add to Home screen"</strong> or <strong>"Install app"</strong></p></div>' +
+      '<div class="a2hs-step-row"><div class="a2hs-step-num">3</div>' +
+      '<p class="a2hs-step-text">Tap <strong>"Add"</strong> to confirm</p></div>';
+  }
+  document.getElementById('a2hsModal').classList.add('show');
+}
+
+function _closeA2hsSheet(permanent) {
+  document.getElementById('a2hsModal').classList.remove('show');
+  _dismissA2hsBanner(permanent); // always dismiss banner — fixes backdrop-close orphan
+}
+
+function _a2hsSheetGotIt() {
+  // iOS: session-only suppress — can't confirm install until standalone detected on next load.
+  // Android fallback + Chrome iOS: permanent — user has been fully instructed.
+  var permanent = (_a2hsPlatform !== 'ios') || _isChromeIOS;
+  _closeA2hsSheet(permanent);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   // Tooltip modal close on overlay tap
   const tm = document.getElementById('tooltipModal');
@@ -10957,6 +11242,9 @@ document.addEventListener('DOMContentLoaded', function() {
   document.addEventListener('gestureend',    e => e.preventDefault(), { passive:false });
   // Double-tap prevention removed — was blocking button taps
   // Zoom is prevented via viewport meta user-scalable=no + gesturestart handler
+
+  // A2HS — register SW and capture beforeinstallprompt (Android)
+  _initA2hs();
 
   // Boot
   startup();
