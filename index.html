@@ -993,6 +993,46 @@ body.a2hs-active #screenAddMatch {
 
 .pw-hint { text-align: center; font-size: 12px; color: var(--grey-mid); margin-top: 20px; font-weight: 300; }
 
+.pw-landing-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 28px;
+  text-decoration: none;
+  text-align: center;
+}
+.pw-landing-line1 {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--grey-mid);
+}
+.pw-landing-line2 {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--accent-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(170,220,50,0.45);
+}
+.pw-landing-line2:hover { color: var(--accent); }
+.pw-landing-new-chip {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--black);
+  font-family: 'Barlow Condensed', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
 /* Password screen decorations */
 .ball-deco {
   position: absolute;
@@ -4743,6 +4783,16 @@ body.a2hs-active #screenAddMatch {
       </svg>
       Try Demo
     </button>
+  </div>
+
+  <div style="text-align:center;">
+    <a class="pw-landing-link" href="https://forgepickle.github.io" target="_blank" rel="noopener">
+      <span class="pw-landing-line1">Sharpen your game with better data</span>
+      <span class="pw-landing-line2">
+        See how Forge works
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </span>
+    </a>
   </div>
 </div>
 
@@ -10973,7 +11023,7 @@ function computeAndRenderAlpha() {
 
 const TOOLTIPS = {
   duprTrend:      { title: 'DUPR Rating Trend',    body: 'Your DUPR rating after each match, on a scale of 2.0-8.0. Shows your last 10 matches.\n\n📈 Best: Steep upward curve — improving fast.\n📉 Worst: Downward slide — time to regroup.\n\nMost club players sit between 3.0 and 4.5.' },
-  formIndex:      { title: 'Form Index',            body: 'Rolling score from your last 5 matches, weighted by opponent strength and point margin.\n\n🔥 On Fire: Dominant run — keep it up!\n🟢 Hot: Strong recent form.\n🟡 Warm: Mixed — could go either way.\n🔴 Cold: Rough patch. Time to heat up.' },
+  formIndex:      { title: 'Form Index',            body: 'Your last 5 matches at a glance — counts wins only. Ties show as amber dots but don\'t count for or against you.\n\n🔥 On Fire: 5 wins from 5 — you\'re untouchable right now!\n🟢 Hot: 3 or 4 wins — strong recent form.\n🟡 Warm: 2 wins — mixed, could go either way.\n🔴 Cold: 0 or 1 win — tough stretch. Time to reset.' },
   clutchRating:   { title: 'Clutch Rating',         body: "All-time win rate when your team's combined rating was lower than your opponents' going in.\n\n📈 Best: 100% — you thrive under pressure!\n📉 Worst: 0% — tough when outgunned.\n\nNo data = you haven't been the underdog yet." },
   bestPartners:   { title: 'Best Partners',          body: 'Your top 3 partners by synergy score. Win rate = wins out of total matches including ties. Synergy = how much better you perform together compared to what your individual ratings predict.\n\n⚡ Strong Chemistry: above +0.20\n〰 Neutral: playing to ratings\n⚠ Mismatch: below −0.20\n\nMin 2 matches to qualify. ⚠ Low sample = fewer than 4 matches together, treat with caution.' },
   pairWinRate:    { title: 'Partnership Win Rate',  body: 'Win % for this pair (min 2 games to qualify).\n\n📈 Best: 100% — unbeaten as a duo!\n📉 Worst: 0% — yet to find their groove.\n\n⚠ = fewer than 4 games, treat with caution.' },
