@@ -6105,7 +6105,11 @@ function computeRatings(teamA, teamB, scores) {
       const newRating = parseFloat(Math.max(2.0, Math.min(8.0, oldRating + delta)).toFixed(2));
       player.rating        = newRating;
       player.games        += 1;
-      player.ratingHistory = [...(player.ratingHistory || []), newRating].slice(-10);
+      const baseHist = player.ratingHistory || [];
+      // On first-ever match, seed ratingHistory with the starting rating so the chart
+      // starts from the player's origin point rather than their post-match-1 value.
+      const histSeed = (baseHist.length === 0 && player.games === 1) ? [oldRating] : baseHist;
+      player.ratingHistory = [...histSeed, newRating].slice(-10);
       player.last5         = [...(player.last5 || []), isTied ? 'T' : won ? 'W' : 'L'].slice(-5);
       if (isUD && !isTied) { won ? player.clutchW++ : player.clutchL++; } // ties: no clutch credit
       ratingChanges.push({ id: player.id, name: player.name, oldRating, newRating, delta });
@@ -6409,7 +6413,8 @@ function applyMatchToPair(id1, id2, m, isTeamA) {
       : STARTING_RATING;
     const pairRating = (p1o.rating + p2o.rating) / 2;
     const expected = 1 / (1 + Math.pow(10, (avgRating - pairRating) / 4));
-    pair.synergy = parseFloat(((pair.wins / total) - expected).toFixed(2));
+    const decided = pair.wins + pair.losses; // ties excluded — consistent with Form Index tie-neutral treatment
+    pair.synergy = parseFloat(((decided > 0 ? pair.wins / decided : 0.5) - expected).toFixed(2));
   }
 }
 
@@ -10866,11 +10871,12 @@ function _computeDna(pid, allPlayers) {
   };
 
   // --- Dominance: avg margin in actual wins only (normalised, ±11 cap) ---
+  // Zero wins → 0.0, not 0.5: a winless player is low on this axis, not average.
   const wins = pMatches.filter(function(m) { return _matchWon(m, pid); });
   const dominanceRaw = wins.length > 0
     ? wins.reduce(function(s, m) { return s + _matchMarginForPlayer(m, pid); }, 0) / wins.length
-    : 0;
-  const dominance = Math.min(1, Math.max(0, (dominanceRaw + 11) / 22));
+    : null;
+  const dominance = dominanceRaw !== null ? Math.min(1, Math.max(0, (dominanceRaw + 11) / 22)) : 0;
 
   // --- Resilience: win rate in close DECIDED matches only (ties excluded from pool) ---
   const closeMatches = pMatches.filter(function(m) {
@@ -10882,8 +10888,13 @@ function _computeDna(pid, allPlayers) {
     resilience = closeMatches.filter(function(m) { return _matchWon(m, pid); }).length / closeMatches.length;
   }
 
-  // --- Reliability: 1 - SD/11 of per-match margins (all matches including ties) ---
-  const margins = pMatches.map(function(m) { return _matchMarginForPlayer(m, pid); });
+  // --- Reliability: 1 - SD/11 of per-GAME avg margins (all matches including ties) ---
+  // Dividing each match margin by its game count normalises 1/2/3-game formats to the
+  // same ±11 scale, making /11 the correct denominator regardless of format.
+  const margins = pMatches.map(function(m) {
+    const g = (m.scores || []).length || 1;
+    return _matchMarginForPlayer(m, pid) / g;
+  });
   const mean = margins.reduce(function(a, b) { return a + b; }, 0) / margins.length;
   const variance = margins.reduce(function(s, v) { return s + Math.pow(v - mean, 2); }, 0) / margins.length;
   const reliability = Math.min(1, Math.max(0, 1 - Math.sqrt(variance) / 11));
@@ -11034,7 +11045,7 @@ const TOOLTIPS = {
   alphaDna:         { title: 'Player DNA',             body: 'Your competitive fingerprint across five axes:\n\n• Dominance — average scoring margin when you win, shows ceiling.\n• Resilience — win rate in close games (margin ≤2), shows mental edge.\n• Reliability — consistency of performance; low variance = high reliability.\n• Collaborator — uplift you give partners versus their baseline.\n• Disruptor — win rate against opponents rated above you.\n\nThe pentagon shape reveals your playstyle archetype.' },
   alphaCorridor:    { title: 'Performance Corridor',   body: 'Shows the range between your best and worst performances over all your matches (10th to 90th percentile point margins), with a needle marking your last 5 matches average.\n\n📈 Best: Needle at the top of a tight corridor — consistently dominant.\n📉 Worst: Needle at the bottom — recent form has dipped.\n〰 Wide corridor — high variance; big wins and big losses.' },
   // Top 3s tooltips
-  top3sStreak:       { title: 'Current Win Streak',      body: 'Number of consecutive wins from the most recent match. Resets to zero on any loss or tie. Only players currently on a winning run appear here.\n\nMin: 2 consecutive wins to qualify.' },
+  top3sStreak:       { title: 'Current Win Streak',      body: 'Number of consecutive wins from the most recent match. A tie or loss ends the streak — only uninterrupted wins count.\n\nOnly players currently on a winning run appear here.\nMin: 2 consecutive wins to qualify.' },
   top3sBestSynergy:  { title: 'Best Synergies',          body: 'Top pairs by synergy score — how much better (or worse) they perform together compared to what their individual ratings predict. Positive means they elevate each other.\n\n⚡ Best: above +0.20 — real chemistry!\n〰 Near zero — playing to their ratings.\n\nMin: 2 matches as a pair to qualify.' },
   top3sAttribution:  { title: 'Individual Attribution',  body: 'Measures how much a player personally moves the scoreboard regardless of partner. Calculated as average point margin contribution weighted by match recency — recent matches count more.\n\n📈 Best: High positive — lifts any partnership.\n📉 Worst: Negative — partners tend to score better without them.\n\nMin: 1 match to qualify.' },
   top3sAtTheirPeak:  { title: 'At Their Peak',           body: 'How close a player\'s recent form (last 5 match average) is to their career ceiling (90th percentile). Positive means they are currently above their historical peak.\n\n📈 Best: Positive — performing above their own ceiling right now.\n📉 Worst: Large negative — significant gap between current and peak form.\n\nMin: 2 matches to qualify.' },
@@ -11042,7 +11053,7 @@ const TOOLTIPS = {
   top3sResilience:   { title: 'Resilience',              body: 'Win rate in close, decided matches (point margin of 2 or less, ties excluded). Higher means they hold their nerve when games are on the line.\n\n📈 Best: Near 100% — clutch under pressure.\n〰 50% — wins half of close matches.\n\nMin: 2 matches to qualify.' },
   top3sReliability:  { title: 'Reliability',             body: 'Performance consistency across all matches — lower variance equals higher reliability. Higher means their results are predictable and stable regardless of opponent or partner.\n\n📈 Best: Near 100% — rock solid every game.\n〰 Lower — big swings between wins and losses.\n\nMin: 2 matches to qualify.' },
   top3sCollaborator: { title: 'Collaborator',            body: 'Average win-rate uplift given to partners compared to those partners\' baseline without this player. Higher means they make everyone around them better.\n\n📈 Best: Near 100% — partners win more with them.\n〰 50% — neutral impact on partners.\n\nMin: 2 matches to qualify.' },
-  top3sDisruptor:    { title: 'Disruptor',               body: 'Win rate against opponents rated above them. Higher means they consistently punch above their weight and upset stronger players.\n\n📈 Best: Near 100% — beats better-rated opponents regularly.\n〰 50% — wins half of uphill battles.\n\nMin: 2 matches against higher-rated opponents to qualify.' }
+  top3sDisruptor:    { title: 'Disruptor',               body: 'Win rate against opponents rated above them. Higher means they consistently punch above their weight and upset stronger players.\n\n📈 Best: Near 100% — beats better-rated opponents regularly.\n〰 50% — wins half of uphill battles.\n\nNote: uses current ratings to assess all past matches — may differ from Clutch, which uses match-time ratings.\n\nMin: 2 matches against higher-rated opponents to qualify.' }
 };
 
 function showTooltipKey(key) { const t = TOOLTIPS[key]; if (t) showTooltip(t.title, t.body); }
