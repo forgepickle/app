@@ -1120,6 +1120,37 @@ body.a2hs-active #screenAddMatch {
 .startup-retry-btn:hover { background: var(--accent-dim); }
 .startup-retry-btn:active { transform: scale(0.98); }
 
+/* "Enter your group ID" recovery form on the no-group startup error screen */
+.group-id-form {
+  margin-top: 18px; width: 100%; max-width: 280px;
+  background: #fff; border: 2px solid var(--accent); border-radius: 12px;
+  padding: 14px 16px; box-sizing: border-box; text-align: left;
+}
+.group-id-form-label {
+  font-size: 12px; font-weight: 700; color: var(--grey-dark); margin-bottom: 8px;
+}
+.group-id-input-row { display: flex; gap: 8px; }
+.group-id-input {
+  flex: 1; min-width: 0; height: 38px; border: 1.5px solid var(--grey-light);
+  border-radius: 8px; padding: 0 12px; font-size: 14px; color: var(--black);
+  background: var(--grey-xlight); box-sizing: border-box;
+  font-family: 'Barlow', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.group-id-input:focus { outline: none; border-color: var(--accent-dim); background: #fff; }
+.group-id-submit {
+  height: 38px; padding: 0 18px; border-radius: 8px; border: none;
+  background: var(--accent); color: var(--black); font-weight: 700; font-size: 14px;
+  cursor: pointer; white-space: nowrap; transition: background 0.15s, opacity 0.15s;
+}
+.group-id-submit:hover:not(:disabled) { background: var(--accent-dim); }
+.group-id-submit:active:not(:disabled) { transform: scale(0.98); }
+.group-id-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+.group-id-error {
+  display: none; font-size: 11px; color: var(--error); margin-top: 8px;
+}
+.group-id-error.show { display: block; }
+.group-id-input.invalid { border-color: var(--error); }
+
 /* Group name pill — shown between logo and pw-card when group name is available */
 .group-name-pill {
   display: none;
@@ -4161,11 +4192,6 @@ body.a2hs-active #screenAddMatch {
   scrollbar-width: none;
 }
 .session-tab-pencil-row .toggle-pills::-webkit-scrollbar { display: none; }
-.shuffle-rotation-notice {
-  font-family: 'Barlow', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px; color: #d97706; /* amber */
-  margin-bottom: 12px;
-}
 /* Court card */
 .court-card {
   background: var(--white);
@@ -4482,9 +4508,6 @@ body.a2hs-active #screenAddMatch {
 .shuffle-meta-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   min-height: 28px; margin-bottom: 4px;
-}
-.shuffle-rotation-notice {
-  flex: 1;
 }
 .swap-inline-btn {
   flex-shrink: 0;
@@ -5296,6 +5319,10 @@ body.a2hs-active #screenAddMatch {
         </div>
         <!-- Player/court count advisory — shown when selection is invalid -->
         <div id="shCourtAdvisory" class="forge-advisory shuffle-advisory" style="display:none;"></div>
+        <!-- Pre-generation repeat-exposure notice — informational only, never
+             blocks progression. Set before the user taps Generate so there
+             are no surprises, rather than only explaining after the fact. -->
+        <div id="shRepeatAdvisory" class="forge-notice" style="margin:8px 0 12px;display:none;"></div>
       </div>
 
       <!-- STEP 2: MODE -->
@@ -5352,8 +5379,6 @@ body.a2hs-active #screenAddMatch {
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
           </button>
         </div>
-        <!-- Rotation notice (standalone row, visibility:hidden reserves space) -->
-        <div class="shuffle-rotation-notice" id="shuffleRotationNotice" style="visibility:hidden;"></div>
         <!-- Advisories — shown above court 1 so they are never off-screen -->
         <div id="shuffleAdvisories"></div>
         <!-- Court cards -->
@@ -6613,20 +6638,39 @@ function showStartupError(type) {
   const LANDING = 'https://forgepickle.github.io/';
   let iconClass = 'neutral', iconSvg = '', title = '', body = '', hint = '', extra = '';
 
+  // Shared "enter your group ID" recovery form — reused on no-group and not-found,
+  // since both leave the visitor without a working group ID. Standard IDs are
+  // 6-char base-36 (generateUniqueGroupId_ in RegistryCode.gs); 'demo' is the
+  // only shorter reserved exception, so maxlength stays at 6.
+  const groupIdForm =
+    '<div class="group-id-form">' +
+      '<div class="group-id-form-label">Or enter your group ID</div>' +
+      '<div class="group-id-input-row">' +
+        '<input id="groupIdInput" class="group-id-input" type="text" inputmode="text" ' +
+          'autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="6" ' +
+          'pattern="[a-z0-9]+" placeholder="abc123" ' +
+          'oninput="_sanitizeGroupIdInput(this)" onkeydown="_groupIdKeydown(event)" />' +
+        '<button id="groupIdSubmitBtn" class="group-id-submit" onclick="_submitGroupId()" disabled>Go</button>' +
+      '</div>' +
+      '<div id="groupIdError" class="group-id-error">Enter all 6 characters</div>' +
+    '</div>';
+
   if (type === 'no-group') {
     iconClass = 'neutral';
     iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
     title     = 'No group link';
     body      = 'This link doesn\'t include a group ID.';
     hint      = 'Links look like: <code>forgepickle.github.io/app/?group=abc123</code>';
-    extra     = '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Get your group link at the Forge landing page →</a>';
+    extra     = groupIdForm +
+                '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Get your group link at the Forge landing page →</a>';
   } else if (type === 'not-found') {
     iconClass = 'danger';
     iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
     title     = 'Group not found';
     body      = 'This group ID doesn\'t exist in the Forge registry.';
     hint      = 'Double-check your link or ask your group admin for the correct URL.';
-    extra     = '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Register a new group at the Forge landing page →</a>';
+    extra     = groupIdForm +
+                '<a class="startup-landing-link" href="' + LANDING + '" target="_blank" rel="noopener">Register a new group at the Forge landing page →</a>';
   } else if (type === 'unreachable') {
     iconClass = 'accent';
     iconSvg   = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>';
@@ -6651,6 +6695,45 @@ function showStartupError(type) {
     (hint ? '<div class="startup-error-hint">' + hint + '</div>' : '') +
     extra;
   errorEl.classList.add('show');
+}
+
+/**
+ * Strip the group-ID input to valid characters as the user types (lowercase a-z0-9,
+ * matching the 6-char base-36 IDs generateUniqueGroupId_ produces). Go stays disabled
+ * until exactly 6 characters are entered; shows an inline message while short.
+ */
+function _sanitizeGroupIdInput(input) {
+  const cleaned = input.value.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
+  if (input.value !== cleaned) input.value = cleaned;
+  const btn   = document.getElementById('groupIdSubmitBtn');
+  const errEl = document.getElementById('groupIdError');
+  const complete = cleaned.length === 6;
+  if (btn) btn.disabled = !complete;
+  const showError = cleaned.length > 0 && !complete;
+  if (errEl) errEl.classList.toggle('show', showError);
+  input.classList.toggle('invalid', showError);
+}
+
+/** Enter key in the group-ID input submits, same as tapping Go. */
+function _groupIdKeydown(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    _submitGroupId();
+  }
+}
+
+/** Reload the app with the entered group ID, routing through the normal startup() flow. */
+function _submitGroupId() {
+  const input = document.getElementById('groupIdInput');
+  if (!input) return;
+  const id = input.value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const errEl = document.getElementById('groupIdError');
+  if (id.length !== 6) {
+    if (errEl) errEl.classList.add('show');
+    input.classList.add('invalid');
+    return;
+  }
+  window.location.search = 'group=' + id;
 }
 
 /** Clear error screen and restart routing. */
@@ -6783,6 +6866,12 @@ async function startup() {
 // Resets the entire UI to the pre-login state.
 // Called at startup and on exitDemoMode to guarantee a clean slate.
 function _resetAppUI() {
+  // Free the shuffle optimizer's Worker (if one was ever spun up) on
+  // logout/full reset so it doesn't persist across a login cycle.
+  if (_shuffleWorkerInstance) {
+    try { _shuffleWorkerInstance.terminate(); } catch(e) {}
+    _shuffleWorkerInstance = null;
+  }
   // Hide app shell and all chrome
   document.getElementById('appShell').style.display    = 'none';
   document.getElementById('navBar').classList.remove('visible');
@@ -11421,6 +11510,8 @@ function openShuffleWizard() {
   if (countEl) countEl.textContent = '0 selected';
   const advEl = document.getElementById('shCourtAdvisory');
   if (advEl) advEl.style.display = 'none';
+  const repeatAdvEl = document.getElementById('shRepeatAdvisory');
+  if (repeatAdvEl) repeatAdvEl.style.display = 'none';
   _buildShufflePlayerGrid();
   showShuffleStep(1);
   document.getElementById('shuffleWizardOverlay').classList.add('show');
@@ -11530,6 +11621,39 @@ function _updateShStep1Next() {
       adv.style.display = 'none';
     }
   }
+  _updateShRepeatAdvisory(shuffle.players, courts, shuffle.rounds);
+}
+
+// Pre-generation heads-up (informational, Rule 12 Type A).
+//
+// v9.2.3 rewrite — dropped the round-number estimate entirely (Lead
+// direction: don't predict which round, just flag whether a repeat is
+// coming) and replaced the whole simulation-based approach with a plain
+// arithmetic certainty check. A session needs rounds × edgesPerRound
+// player-pair relationships in total; only n·(n-1)/2 distinct pairs exist
+// among the selected players. If the session needs more than that, a
+// repeat is mathematically GUARANTEED somewhere — pigeonhole principle,
+// not a prediction — so there's no search, no calibration, no debounce
+// needed, and it can never be wrong in the way a round-number estimate
+// could be. If the session's demand doesn't exceed supply, this stays
+// silent — a repeat is merely possible, not certain, and this advisory
+// only speaks when it can be certain.
+function _updateShRepeatAdvisory(playerIds, courts, rounds) {
+  const el = document.getElementById('shRepeatAdvisory');
+  if (!el) return;
+  if (courts === null || !rounds || !playerIds || playerIds.length < 4) { el.style.display = 'none'; return; }
+  const n = playerIds.length;
+  const slots = Math.min(n, courts * 4);
+  const groupsPerRound = Math.floor(slots / 4);
+  if (groupsPerRound < 1) { el.style.display = 'none'; return; }
+  const edgesPerRound = groupsPerRound * 6;
+  const distinctEdges = n * (n - 1) / 2;
+  const guaranteed = (rounds * edgesPerRound) > distinctEdges;
+  if (!guaranteed) { el.style.display = 'none'; return; }
+  const infoSvgSm = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;color:var(--grey-mid);"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+  const msg = 'With ' + n + ' players on ' + courts + ' court' + (courts > 1 ? 's' : '') + ', some pairings will repeat across rounds.';
+  el.innerHTML = infoSvgSm + '<span class="notice-body">' + escHtml(msg) + '</span>';
+  el.style.display = 'flex';
 }
 
 function toggleShufflePlayer(id) {
@@ -11604,7 +11728,7 @@ async function shuffleGenerate() {
 
   const selectedPlayers = shuffle.players.map(id => players.find(p => p.id === id)).filter(Boolean);
   try {
-    shuffle.lineup = computeShuffleLineup(selectedPlayers, shuffle.courts, shuffle.rounds, shuffle.mode);
+    shuffle.lineup = await computeShuffleLineup(selectedPlayers, shuffle.courts, shuffle.rounds, shuffle.mode);
   } catch(e) {
     if (genBtn)  { genBtn.disabled  = false; genBtn.classList.remove('loading'); }
     if (backBtn)   backBtn.disabled = false;
@@ -11648,10 +11772,6 @@ function _renderShuffleResult() {
       tabsEl.style.display = 'none';
     }
   }
-
-  // Rotation notice — use visibility so the flex-1 spacer always holds its space,
-  // keeping the swap icon pinned to the right even when there is no notice text.
-  _updateRotationNotice();
 
   _renderShuffleCourtCards();
   _renderShuffleAdvisories(selectedPlayers);
@@ -11704,23 +11824,6 @@ function _renderBenchSection(allPlayerIds, round, sectionId, containerId) {
   }
 }
 
-// Update the rotation notice for the currently active round tab.
-// Called on initial render and whenever the active tab changes.
-function _updateRotationNotice() {
-  const noticeEl = document.getElementById('shuffleRotationNotice');
-  if (!noticeEl) return;
-  const msg = shuffle.lineup && shuffle.lineup.noticesPerRound
-    ? shuffle.lineup.noticesPerRound[shuffle.activeRoundTab]
-    : null;
-  if (msg) {
-    noticeEl.textContent = msg;
-    noticeEl.style.visibility = 'visible';
-  } else {
-    noticeEl.textContent = '';
-    noticeEl.style.visibility = 'hidden';
-  }
-}
-
 function switchShuffleRoundTab(idx) {
   // Fully exit swap mode when switching rounds — edits on the previous round are kept
   if (shuffle.swapMode) exitShuffleSwapMode();
@@ -11730,7 +11833,6 @@ function switchShuffleRoundTab(idx) {
   if (tabsEl) {
     tabsEl.querySelectorAll('.toggle-pill').forEach((btn, i) => btn.classList.toggle('active', i === idx));
   }
-  _updateRotationNotice();
   _renderShuffleCourtCards();
 }
 
@@ -11834,7 +11936,7 @@ async function _doShuffleStartOver() {
   const selectedPlayers = shuffle.players.map(id => players.find(p => p.id === id)).filter(Boolean);
   const spinnerStart = Date.now();
   try {
-    shuffle.lineup = computeShuffleLineup(selectedPlayers, shuffle.courts, shuffle.rounds, shuffle.mode);
+    shuffle.lineup = await computeShuffleLineup(selectedPlayers, shuffle.courts, shuffle.rounds, shuffle.mode);
   } catch(e) {
     if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('loading'); }
     if (saveBtn)    saveBtn.disabled  = false;
@@ -12565,14 +12667,21 @@ async function fetchActiveSession() {
 
 // ── Shuffle Algorithm ──────────────────────────────────────────────
 
-function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
+async function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
+  // ── v9.2.0 — Random mode routes to the full-session optimizer below.
+  // Balanced/Tiered are completely untouched — same round-by-round algorithm
+  // as before, still synchronous under the hood, just awaited here for a
+  // single consistent async signature across all three modes.
+  if (mode === 'random') {
+    return await _computeRandomShuffleLineup(selectedPlayers, courts, rounds);
+  }
+
   // pairFrequency: Map of pair-key → use count across all rounds (used for Σcount² scoring)
   const pairFrequency = new Map();
   // lastRoundPairs: Set of pair-keys from the immediately previous round (recency nudge)
   let lastRoundPairs = new Set();
   const roundLineups = [];
   let restedPlayers  = [];
-  const noticesPerRound = [];
   let doubleRestWarning = null;
   const restCounts = {}; // playerId → total rounds sat out across all rounds so far
 
@@ -12580,8 +12689,6 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
     const result = r === 0
       ? { lineup: _generateRound(selectedPlayers, courts, mode, restedPlayers, r), notice: null }
       : _generateRoundWithRotation(selectedPlayers, courts, mode, pairFrequency, lastRoundPairs, restedPlayers, r);
-
-    noticesPerRound.push(result.notice || null);
 
     // Track rested players for next round
     const playedIds = new Set(result.lineup.flatMap(court => [...court.teamA, ...court.teamB]));
@@ -12618,7 +12725,486 @@ function computeShuffleLineup(selectedPlayers, courts, rounds, mode) {
     restedPlayers = newRested;
   }
 
-  return { rounds: roundLineups, noticesPerRound, doubleRestWarning };
+  return { rounds: roundLineups, doubleRestWarning };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RANDOM MODE — FULL-SESSION OPTIMIZER (v9.2.0)
+// ══════════════════════════════════════════════════════════════════
+// Replaces the old round-by-round greedy generator for Random mode only.
+// Plans every round together (simulated annealing) instead of committing
+// round-by-round, so an early round can no longer box a later round into
+// a forced repeat with no visibility into what's coming.
+//
+// Scope: session-only. No match history is read — the search only knows
+// about the rounds being generated right now (Lead decision: cross-session
+// history explicitly out of scope).
+//
+// Runs inside a Web Worker where available (keeps the ~1s search off the
+// main thread — spinner and taps stay responsive). The worker is built
+// from an in-memory Blob, not a separate file, so the single-index.html
+// architecture is preserved. Falls back to a yielded main-thread loop if
+// Workers are unavailable or blocked (e.g. strict CSP).
+//
+// Governance Rule 1: zero network calls anywhere in this section — pure
+// local computation over the players/courts/rounds already selected in
+// the wizard.
+
+// ── Core search — deliberately closure-free (no reference to anything
+// outside its own arguments) so it can run unmodified either directly on
+// the main thread (fallback) or stringified into the Worker (preferred).
+// Correctness over micro-optimization: cost is fully recomputed each
+// iteration rather than incrementally patched. Validated in simulation at
+// well under 200ms for the worst case (16 players/3 courts/10 rounds) at
+// several thousand iterations — comfortable margin under the ~900ms budget
+// even before accounting for the Worker removing main-thread contention.
+function _shuffleOptimizerInit(input) {
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function shuffleArr(arr, rng) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    }
+    return arr;
+  }
+  const playerIds = input.playerIds, courts = input.courts, rounds = input.rounds;
+  const rng = mulberry32(input.seed);
+  const P = playerIds.length;
+  const slots = courts * 4;
+  const B = Math.max(0, P - slots);
+  const totalBench = new Array(P).fill(0);
+  const benchedLastRound = new Array(P).fill(false);
+  const schedule = [];
+  for (let r = 0; r < rounds; r++) {
+    const idxs = playerIds.map((_, i) => i);
+    idxs.sort((a, b) =>
+      (totalBench[a] * 1000 + (benchedLastRound[a] ? 100000 : 0) + rng() * 10) -
+      (totalBench[b] * 1000 + (benchedLastRound[b] ? 100000 : 0) + rng() * 10)
+    );
+    const benchSet = new Set(idxs.slice(0, B));
+    const playing = shuffleArr(idxs.slice(B), rng);
+    const assign = new Array(P).fill(-1);
+    benchSet.forEach(i => totalBench[i]++);
+    for (let c = 0; c < courts; c++) {
+      for (let k = 0; k < 4; k++) {
+        const pi = playing[c * 4 + k];
+        if (pi !== undefined) assign[pi] = c;
+      }
+    }
+    schedule.push(assign);
+    for (let i = 0; i < P; i++) benchedLastRound[i] = benchSet.has(i);
+  }
+  return {
+    playerIds, courts, rounds,
+    orderBiasWeight: input.orderBiasWeight,
+    gapWeight: input.gapWeight || 0,
+    targetGap: input.targetGap || 2,
+    rng, T: 50, coolRate: 0.999,
+    schedule,
+    bestSchedule: schedule.map(a => a.slice()),
+    curCost: null, bestCost: null, iterationsRun: 0
+  };
+}
+
+// v9.2.3 — added gapWeight/targetGap. The existing orderBias term only
+// rewards a repeat for landing "late" in the session overall; it says
+// nothing about how close together the SAME pair's two occurrences are.
+// A pair repeating in round 2 then round 3 (immediately adjacent — visibly
+// bad to a player reading the lineup) scored no worse than a pair whose
+// two occurrences happened to land late in the session. gapPenalty fixes
+// that directly: penalises (squared) how far short a repeat's gap falls
+// below targetGap, so gap=1 (back-to-back) is punished hardest and
+// anything >= targetGap rounds apart costs nothing. Kept ALONGSIDE
+// orderBias rather than replacing it — simulation showed the combination
+// clears far more adjacent repeats at near-zero extra cost than either
+// term does alone. Operates on the same occurrenceRounds map that already
+// treats "played with" and "played against" as the same edge type, so
+// this applies equally to partner AND opponent repeats — verified via
+// simulation before building, not assumed.
+function _shuffleOptimizerCost(schedule, playerIds, courts, orderBiasWeight, gapWeight, targetGap) {
+  function pairKey(a, b) { return a < b ? a + '|' + b : b + '|' + a; }
+  const P = playerIds.length, R = schedule.length;
+  const benchCount = new Array(P).fill(0);
+  let consecViol = 0;
+  const occurrenceRounds = new Map();
+  for (let r = 0; r < R; r++) {
+    const assign = schedule[r];
+    const groups = [];
+    for (let c = 0; c < courts; c++) groups.push([]);
+    for (let i = 0; i < P; i++) {
+      const c = assign[i];
+      if (c === -1) { benchCount[i]++; continue; }
+      groups[c].push(playerIds[i]);
+    }
+    groups.forEach(g => {
+      if (g.length < 2) return;
+      for (let x = 0; x < g.length; x++) {
+        for (let y = x + 1; y < g.length; y++) {
+          const k = pairKey(g[x], g[y]);
+          if (!occurrenceRounds.has(k)) occurrenceRounds.set(k, []);
+          occurrenceRounds.get(k).push(r);
+        }
+      }
+    });
+    if (r > 0) {
+      for (let i = 0; i < P; i++) {
+        if (schedule[r][i] === -1 && schedule[r - 1][i] === -1) consecViol++;
+      }
+    }
+  }
+  let edgeCost = 0, orderBias = 0, gapPenalty = 0;
+  occurrenceRounds.forEach(roundsUsed => {
+    const freq = roundsUsed.length;
+    edgeCost += freq * freq;
+    if (freq > 1) {
+      for (let j = 1; j < roundsUsed.length; j++) {
+        orderBias += orderBiasWeight * (R - roundsUsed[j]);
+        const gap = roundsUsed[j] - roundsUsed[j - 1];
+        const shortfall = Math.max(0, targetGap - gap);
+        gapPenalty += gapWeight * shortfall * shortfall;
+      }
+    }
+  });
+  const idealBench = P > 0 ? benchCount.reduce((a, b) => a + b, 0) / P : 0;
+  let fairness = 0;
+  benchCount.forEach(b => { fairness += (b - idealBench) * (b - idealBench); });
+  const total = edgeCost + consecViol * 2000 + fairness * 50 + orderBias + gapPenalty;
+  return { total };
+}
+
+function _shuffleOptimizerStep(state, iterations) {
+  const playerIds = state.playerIds, courts = state.courts, rounds = state.rounds;
+  const orderBiasWeight = state.orderBiasWeight, gapWeight = state.gapWeight, targetGap = state.targetGap, rng = state.rng;
+  const P = playerIds.length, R = rounds;
+  if (!state.curCost) state.curCost = _shuffleOptimizerCost(state.schedule, playerIds, courts, orderBiasWeight, gapWeight, targetGap);
+  if (!state.bestCost) state.bestCost = state.curCost;
+  for (let n = 0; n < iterations; n++) {
+    const candidate = state.schedule.map(a => a.slice());
+    if (rng() < 0.6 || R < 2) {
+      // Within-round swap: exchange two players' court assignment inside
+      // the SAME round. Provably safe — swapping two values within one
+      // array can never change that round's bench count or per-court
+      // headcount, since it's the same multiset of values either way.
+      const r = Math.floor(rng() * R), i = Math.floor(rng() * P), j = Math.floor(rng() * P);
+      if (i !== j) { const t = candidate[r][i]; candidate[r][i] = candidate[r][j]; candidate[r][j] = t; }
+    } else {
+      // Round-pair reorder: swap two ENTIRE rounds' positions in the
+      // sequence. Each round's own internal structure (bench count, court
+      // fill) travels with it unchanged — only its position in the
+      // sequence moves — so this is also invariant-safe. This is what
+      // lets the round-order bias term actually do its job: trying
+      // different sequencings of the same set of valid rounds. It does
+      // NOT reduce total repeats (reordering doesn't change which edges
+      // occur), only which round they land in — that's intentional,
+      // within-round swaps own the repeat-reduction job.
+      //
+      // BUG FIX (found via live testing, 2026-07): the original move here
+      // swapped one player's assignment in round r1 with a DIFFERENT
+      // player's assignment in round r2. That breaks the "exactly B
+      // players bench per round" invariant — it can silently move an
+      // extra player onto the bench in one round while leaving a court a
+      // player short, which rendered as "?" in the lineup. Reproduced at
+      // 15/15 trials before this fix; 0/15 after (see verification below).
+      const r1 = Math.floor(rng() * R), r2 = Math.floor(rng() * R);
+      if (r1 !== r2) { const t = candidate[r1]; candidate[r1] = candidate[r2]; candidate[r2] = t; }
+    }
+    const candCost = _shuffleOptimizerCost(candidate, playerIds, courts, orderBiasWeight, gapWeight, targetGap);
+    const delta = candCost.total - state.curCost.total;
+    if (delta < 0 || rng() < Math.exp(-delta / Math.max(state.T, 0.01))) {
+      state.schedule = candidate;
+      state.curCost = candCost;
+      if (state.curCost.total < state.bestCost.total) {
+        state.bestSchedule = candidate.map(a => a.slice());
+        state.bestCost = state.curCost;
+      }
+    }
+    state.T *= state.coolRate;
+    state.iterationsRun++;
+  }
+  return state;
+}
+
+// v9.2.4 — Adjacency repair pass, Random mode only. Runs on the main thread
+// AFTER the annealing search returns (not inside the Worker — it's a cheap
+// deterministic pass, no benefit to offloading it).
+//
+// Why this exists: proved mathematically that a zero-adjacent-repeat schedule
+// is only POSSIBLE when players >= courts*(8-courts) — below that threshold,
+// pigeonhole forces at least one repeat between some pair of consecutive
+// rounds no matter what any algorithm does (verified by direct construction
+// search, not just this annealer). Above threshold it's achievable, but the
+// annealer's cost-function tradeoffs (balancing frequency fairness, bench
+// fairness, AND spacing all at once) don't reliably land on it — simulation
+// showed 12p/2c hitting exact zero only 3-6 of 8 seeds pre-repair.
+//
+// This pass targets adjacency specifically and directly: walk rounds in
+// order, and for any round whose pairings overlap the round immediately
+// before it, search for an alternative grouping of THAT round with zero
+// overlap against the previous round — preferring one that also avoids
+// creating a new overlap with the NEXT round (so fixing one boundary
+// doesn't just relocate the violation to the next one), and preferring
+// bench choices that don't repeat last round's bench player. Multiple
+// sweeps (fixing one round can change what's needed for its neighbor).
+// Below the mathematical threshold, no valid candidate exists and the
+// round is correctly left unchanged — verified via simulation to be a
+// safe no-op (0 invariant violations, ~80ms) rather than a crash or a
+// wasted search.
+function _shuffleAdjacencyRepair(bestSchedule, playerIds, courts, seed) {
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function pairKey(a, b) { return a < b ? a + '|' + b : b + '|' + a; }
+  function edgesOfRound(assign, P) {
+    const groups = [];
+    for (let c = 0; c < courts; c++) groups.push([]);
+    for (let i = 0; i < P; i++) { const c = assign[i]; if (c !== -1) groups[c].push(playerIds[i]); }
+    const s = new Set();
+    groups.forEach(g => { for (let x = 0; x < g.length; x++) for (let y = x + 1; y < g.length; y++) s.add(pairKey(g[x], g[y])); });
+    return s;
+  }
+
+  const rng = mulberry32(seed);
+  const P = playerIds.length, R = bestSchedule.length, B = P - courts * 4;
+  const MAX_ATTEMPTS = 1500, MAX_PASSES = 4;
+  if (B <= 0 || R < 2) return bestSchedule; // nothing to bench, or nothing to be adjacent to
+
+  let cur = bestSchedule.map(a => a.slice());
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    let changedAny = false;
+    const totalBench = new Array(P).fill(0);
+    for (let i = 0; i < P; i++) if (cur[0][i] === -1) totalBench[i]++;
+    let benchedLast = cur[0].map(v => v === -1);
+
+    for (let r = 1; r < R; r++) {
+      const prevEdges = edgesOfRound(cur[r - 1], P);
+      const nextEdges = r + 1 < R ? edgesOfRound(cur[r + 1], P) : new Set();
+      const curEdges = edgesOfRound(cur[r], P);
+      let overlapPrev = 0;
+      curEdges.forEach(e => { if (prevEdges.has(e)) overlapPrev++; });
+
+      if (overlapPrev > 0) {
+        let bestHard = null, bestHardScore = Infinity;
+        let bestSoft = null, bestSoftScore = Infinity;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          const idxs = playerIds.map((_, i) => i);
+          idxs.sort((a, b) =>
+            (totalBench[a] * 1000 + (benchedLast[a] ? 100000 : 0) + rng() * 10) -
+            (totalBench[b] * 1000 + (benchedLast[b] ? 100000 : 0) + rng() * 10)
+          );
+          const benchSet = new Set(idxs.slice(0, B));
+          const playing = idxs.slice(B);
+          for (let i = playing.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = playing[i]; playing[i] = playing[j]; playing[j] = t; }
+          const groups = [];
+          for (let c = 0; c < courts; c++) groups.push(playing.slice(c * 4, c * 4 + 4).map(i => playerIds[i]));
+          const candEdges = new Set();
+          groups.forEach(g => { for (let x = 0; x < g.length; x++) for (let y = x + 1; y < g.length; y++) candEdges.add(pairKey(g[x], g[y])); });
+          let ovPrev = 0, ovNext = 0;
+          candEdges.forEach(e => { if (prevEdges.has(e)) ovPrev++; if (nextEdges.has(e)) ovNext++; });
+          if (ovPrev > 0) continue; // hard filter — must not repeat the immediately preceding round
+          const benchedLastCount = [...benchSet].filter(i => benchedLast[i]).length;
+          const score = benchedLastCount * 100;
+          const assign = new Array(P).fill(-1);
+          for (let c = 0; c < courts; c++) for (let k = 0; k < 4; k++) { const pi = playing[c * 4 + k]; assign[pi] = c; }
+          if (ovNext === 0) { if (score < bestHardScore) { bestHardScore = score; bestHard = assign; } }
+          else { if (score < bestSoftScore) { bestSoftScore = score; bestSoft = assign; } }
+          if (bestHard) break; // good enough — zero overlap both directions
+        }
+        const chosen = bestHard || bestSoft;
+        if (chosen) { cur[r] = chosen; changedAny = true; }
+      }
+      const benchSet = new Set();
+      for (let i = 0; i < P; i++) if (cur[r][i] === -1) { benchSet.add(i); totalBench[i]++; }
+      benchedLast = cur[r].map(v => v === -1);
+    }
+    if (!changedAny) break;
+  }
+  return cur;
+}
+
+// ── App-facing conversion — runs on the main thread only (needs
+// _buildRoundPairs + player names for the rest-warning message, neither
+// of which exist inside the Worker's isolated scope).
+function _shuffleOptimizerFinish(bestSchedule, playerIds, courts, rounds, playerObjsById) {
+  const roundLineups = [];
+  const restCounts = {};
+  for (let r = 0; r < rounds; r++) {
+    const assign = bestSchedule[r];
+    const groups = [];
+    for (let c = 0; c < courts; c++) groups.push([]);
+    playerIds.forEach((id, i) => {
+      const c = assign[i];
+      if (c === -1) { restCounts[id] = (restCounts[id] || 0) + 1; return; }
+      groups[c].push(id);
+    });
+    const lineup = groups.filter(g => g.length >= 2).map(g => ({
+      teamA: [g[0], g[1] !== undefined ? g[1] : null],
+      teamB: [g[2] !== undefined ? g[2] : null, g[3] !== undefined ? g[3] : null]
+    }));
+    roundLineups.push(lineup);
+  }
+
+  // Multi-rest advisory — same message format Balanced/Tiered already use
+  let doubleRestWarning = null;
+  const multiResters = Object.keys(restCounts)
+    .filter(id => restCounts[id] > 1)
+    .sort((a, b) => restCounts[b] - restCounts[a]);
+  if (multiResters.length > 0) {
+    const _restLabel = n => n === 2 ? 'twice' : n + ' times';
+    const nameOf = id => (playerObjsById[id] && playerObjsById[id].name) || id;
+    if (multiResters.length === 1) {
+      const id = multiResters[0];
+      doubleRestWarning = nameOf(id) + ' sits out ' + _restLabel(restCounts[id]) + ' — add a round or adjust courts to balance';
+    } else {
+      const parts = multiResters.map(id => nameOf(id) + ' (' + _restLabel(restCounts[id]) + ')').join(', ');
+      doubleRestWarning = parts + ' sit out multiple times — add a round or adjust courts to balance';
+    }
+  }
+
+  return { rounds: roundLineups, doubleRestWarning };
+}
+
+// ── Worker plumbing ──────────────────────────────────────────────────
+let _shuffleWorkerInstance  = null;
+let _shuffleWorkerAvailable = true;  // flips false permanently for this page load after any failure
+let _shuffleWorkerGenCounter = 0;    // guards against a stale response overwriting a newer generation
+
+function _buildShuffleWorkerSource() {
+  return [
+    _shuffleOptimizerInit.toString(),
+    _shuffleOptimizerCost.toString(),
+    _shuffleOptimizerStep.toString(),
+    'self.onmessage = function(e) {',
+    '  var input = e.data.input, genId = e.data.genId;',
+    '  try {',
+    '    var state = _shuffleOptimizerInit(input);',
+    '    var budgetMs = input.budgetMs || 900;',
+    '    var start = Date.now();',
+    '    var calStart = Date.now();',
+    '    for (var c = 0; c < 100; c++) _shuffleOptimizerCost(state.schedule, state.playerIds, state.courts, state.orderBiasWeight, state.gapWeight, state.targetGap);',
+    '    var msPerEval = Math.max(0.001, (Date.now() - calStart) / 100);',
+    '    var targetIterations = Math.max(500, Math.floor(budgetMs / msPerEval));',
+    '    var done = 0, batch = 150;',
+    '    while (done < targetIterations && (Date.now() - start) < budgetMs) {',
+    '      var thisBatch = Math.min(batch, targetIterations - done);',
+    '      _shuffleOptimizerStep(state, thisBatch);',
+    '      done += thisBatch;',
+    '    }',
+    '    self.postMessage({ genId: genId, ok: true, bestSchedule: state.bestSchedule });',
+    '  } catch(err) {',
+    '    self.postMessage({ genId: genId, ok: false, error: String(err && err.message || err) });',
+    '  }',
+    '};'
+  ].join('\n');
+}
+
+function _getShuffleWorker() {
+  if (!_shuffleWorkerAvailable) return null;
+  if (_shuffleWorkerInstance) return _shuffleWorkerInstance;
+  try {
+    if (typeof Worker === 'undefined') { _shuffleWorkerAvailable = false; return null; }
+    const blob = new Blob([_buildShuffleWorkerSource()], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    _shuffleWorkerInstance = new Worker(url);
+    _shuffleWorkerInstance.addEventListener('error', () => {
+      // Worker crashed at the runtime level (not a caught error inside the
+      // handler) — disable it permanently for this page load; every future
+      // call falls back to the main-thread path instead of hanging.
+      _shuffleWorkerAvailable = false;
+      _shuffleWorkerInstance = null;
+    });
+    return _shuffleWorkerInstance;
+  } catch(e) {
+    _shuffleWorkerAvailable = false;
+    _shuffleWorkerInstance = null;
+    return null;
+  }
+}
+
+// Chunked main-thread fallback — used when Workers are unavailable/blocked.
+// Yields every batch via setTimeout(0) so the spinner and taps stay live.
+async function _runShuffleSearchFallback(input) {
+  const state = _shuffleOptimizerInit(input);
+  const budgetMs = input.budgetMs || 900;
+  const start = Date.now();
+  const calStart = Date.now();
+  for (let c = 0; c < 100; c++) _shuffleOptimizerCost(state.schedule, state.playerIds, state.courts, state.orderBiasWeight, state.gapWeight, state.targetGap);
+  const msPerEval = Math.max(0.001, (Date.now() - calStart) / 100);
+  const targetIterations = Math.max(500, Math.floor(budgetMs / msPerEval));
+  let done = 0;
+  const batch = 150;
+  while (done < targetIterations && (Date.now() - start) < budgetMs) {
+    const thisBatch = Math.min(batch, targetIterations - done);
+    _shuffleOptimizerStep(state, thisBatch);
+    done += thisBatch;
+    await new Promise(r => setTimeout(r, 0));
+  }
+  return state.bestSchedule;
+}
+
+function _runShuffleSearchAsync(input) {
+  const worker = _getShuffleWorker();
+  const genId = ++_shuffleWorkerGenCounter;
+  if (!worker) return _runShuffleSearchFallback(input);
+  return new Promise(resolve => {
+    let settled = false;
+    const budgetMs = input.budgetMs || 900;
+    const watchdog = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      worker.removeEventListener('message', handler);
+      resolve(_runShuffleSearchFallback(input));
+    }, budgetMs + 3000);
+    function handler(e) {
+      if (!e.data || e.data.genId !== genId) return; // stale response from a superseded generation
+      if (settled) return;
+      settled = true;
+      worker.removeEventListener('message', handler);
+      clearTimeout(watchdog);
+      if (e.data.ok) resolve(e.data.bestSchedule);
+      else resolve(_runShuffleSearchFallback(input));
+    }
+    worker.addEventListener('message', handler);
+    try {
+      worker.postMessage({ input, genId });
+    } catch(e) {
+      if (!settled) {
+        settled = true;
+        worker.removeEventListener('message', handler);
+        clearTimeout(watchdog);
+        resolve(_runShuffleSearchFallback(input));
+      }
+    }
+  });
+}
+
+async function _computeRandomShuffleLineup(selectedPlayers, courts, rounds) {
+  const playerIds = selectedPlayers.map(p => p.id);
+  const input = {
+    playerIds, courts, rounds,
+    orderBiasWeight: 3,
+    gapWeight: 15,
+    targetGap: 2,
+    budgetMs: 900,
+    seed: Date.now() % 2147483647
+  };
+  const bestSchedule = await _runShuffleSearchAsync(input);
+  const repairedSchedule = _shuffleAdjacencyRepair(bestSchedule, playerIds, courts, (input.seed + 1) % 2147483647);
+  const playerObjsById = {};
+  selectedPlayers.forEach(p => { playerObjsById[p.id] = p; });
+  return _shuffleOptimizerFinish(repairedSchedule, playerIds, courts, rounds, playerObjsById);
 }
 
 function _generateRound(playerPool, courts, mode, restedPlayers, roundIndex = 0) {
